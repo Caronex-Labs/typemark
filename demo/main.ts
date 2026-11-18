@@ -1,4 +1,5 @@
 import { actionButtons, createEditor, mentions, mermaidRenderer, registerExtension, tags, wikilinks } from "../src/index";
+import type { Thread, Unit } from "../src/index";
 import sample from "./sample.md?raw";
 
 // ---- host-side behaviour: the engine only knows syntax; the app decides what things do
@@ -60,6 +61,8 @@ const ed = createEditor($("#editor"), {
   placeholder: "Start writing…  (type / for syntax)",
   renderers: { mermaid: mermaidRenderer(() => import("mermaid")) },
   ai: {
+    settleMs: 2500,
+    onUnitSettled: (unit) => void reviewUnit(unit),
     // mock agent: a real app would send job.instruction + job.context to its model / tools
     onInstruction: async (job) => {
       await new Promise((r) => setTimeout(r, 700));
@@ -150,93 +153,93 @@ $("#t-reset").onclick = () => {
   toast("Sample document restored");
 };
 
-// ---- mock docs agent: the engine provides the review views; this fake "AI" just drives the API
+// ---- mock docs agent. The ENGINE only reports activity (onUnitSettled) and shows threads;
+// the APP decides the cadence (here: every block when the writer leaves it, plus once on open)
+// and what the agent does. A real app would call its model with unit.markdown + thread.
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const at = (needle: string) => {
-  const i = ed.getMarkdown().indexOf(needle);
-  return i < 0 ? null : { from: i, to: i + needle.length };
-};
+const AGENT = "Docs agent";
 async function stream(write: (chunk: string) => void, text: string) {
   for (const w of text.match(/\S+\s*/g) ?? []) {
     write(w);
-    await sleep(28);
+    await sleep(25);
   }
 }
-const reviewBtn = $<HTMLButtonElement>("#t-review");
-reviewBtn.onclick = async () => {
-  if (reviewBtn.getAttribute("aria-busy") === "true") return;
-  reviewBtn.setAttribute("aria-busy", "true");
-  const agent = "Docs agent";
-  try {
-    const retry = at("retries failed requests 3 times and waits 10 seconds between attempts");
-    if (retry) {
-      await sleep(400);
-      ed.ai.suggestEdit(retry.from, retry.to, "retries failed requests 5 times and waits 2 seconds between attempts", {
-        author: agent,
-        reason: "Checked `src/retry.ts`: `MAX_RETRIES = 5`, `BACKOFF_MS = 2000`.",
-      });
-    }
-    const cache = at("Results are cached for an hour in `~/.cache/tool`.");
-    if (cache) {
-      await sleep(500);
-      const id = ed.ai.addNote({
-        ...cache,
-        kind: "question",
-        author: agent,
-        body: "",
-        streaming: true,
-        replyPlaceholder: "Answer the agent…",
-        onReply: async (answer, note) => {
-          await sleep(500);
-          ed.ai.addReply(note.id, { author: agent, body: `Got it, “${answer}”. I'll suggest wording that matches the code.` });
-          const c = at("Results are cached for an hour in `~/.cache/tool`.");
-          if (c)
-            ed.ai.suggestEdit(c.from, c.to, "Results are cached for 15 minutes in `$XDG_CACHE_HOME/tool`.", {
-              author: agent,
-              reason: "From `src/cache.ts` and your answer.",
-            });
-          updateReview();
-        },
-      });
-      await stream(
-        (w) => ed.ai.appendNote(id, w),
-        "I couldn't confirm this. `src/cache.ts` uses `$XDG_CACHE_HOME/tool` with a **15 minute** TTL, and I found no `~/.cache/tool` path. Is the doc describing an older version, or a setting I'm missing?",
-      );
-      ed.ai.updateNote(id, { status: "ready" });
-    }
-    const sync = at("Run `tool sync --all` to sync every project in the workspace.");
-    if (sync) {
-      await sleep(400);
-      ed.ai.addNote({
-        ...sync,
-        kind: "issue",
-        author: agent,
-        body: "`sync` has no `--all` flag (see `src/commands/sync.ts`); it syncs every project by default. Running the documented command fails with *unknown option*.",
-        actions: [
-          {
-            label: "Apply fix",
-            primary: true,
-            run: (note, { review, editor }) => {
-              const flag = editor.getMarkdown().indexOf(" --all", note.from);
-              if (flag >= 0) review.suggest({ from: flag, to: flag + 6, text: "", author: agent, reason: "Remove the nonexistent flag." });
-              review.removeNote(note.id);
-              updateReview();
-            },
-          },
-          { label: "Open code", run: () => toast("Host app would open src/commands/sync.ts") },
-        ],
-      });
-      await sleep(400);
-      const h = ed.ai.suggestBlocks(sync.to, "", { streaming: true, author: agent, reason: "The code also requires a logged-in workspace." });
-      await stream(h.append, "> [!note] `tool sync` needs a signed-in workspace. Run `tool login` first.");
-      h.finish();
-    }
-    if (!retry && !cache && !sync) toast("Nothing to review: restore the sample document first");
-  } finally {
-    reviewBtn.removeAttribute("aria-busy");
-    updateReview();
+const has = (thread: Thread | null, needle: string) => !!thread?.history.some((e) => e.text.includes(needle));
+
+async function reviewUnit(unit: Unit) {
+  const thread = ed.ai.getThread(unit.id); // the agent sees everything already said about this block
+  const md = unit.markdown;
+  const off = (needle: string) => unit.from + md.indexOf(needle);
+  await sleep(350);
+  if (/retries failed requests 3 times and waits 10 seconds/.test(md) && !has(thread, "5 times")) {
+    const f = off("3 times");
+    ed.ai.suggestEdit(f, f + "3 times and waits 10 seconds".length, "5 times and waits 2 seconds", {
+      author: AGENT,
+      reason: "Checked `src/retry.ts`: `MAX_RETRIES = 5`, `BACKOFF_MS = 2000`.",
+    });
   }
-};
+  if (md.includes("cached for an hour") && !has(thread, "XDG_CACHE_HOME")) {
+    const f = off("cached for an hour");
+    const id = ed.ai.addNote({
+      from: f,
+      to: f + 18,
+      kind: "question",
+      author: AGENT,
+      body: "",
+      streaming: true,
+      replyPlaceholder: "Answer the agent…",
+      onReply: async (answer, note) => {
+        await sleep(500);
+        ed.ai.addReply(note.id, { author: AGENT, body: `Thanks. Suggesting wording that matches the code (“${answer}”).` });
+        const u = ed.ai.unitAt(note.from)!;
+        const g = u.from + u.markdown.indexOf("an hour in `~/.cache/tool`");
+        if (g >= u.from) ed.ai.suggestEdit(g, g + "an hour in `~/.cache/tool`".length, "15 minutes in `$XDG_CACHE_HOME/tool`", { author: AGENT, reason: "From `src/cache.ts` and your answer." });
+        updateReview();
+      },
+    });
+    await stream((w) => ed.ai.appendNote(id, w), "I couldn't confirm this. `src/cache.ts` uses `$XDG_CACHE_HOME/tool` with a **15 minute** TTL. Is the doc describing an older version?");
+    ed.ai.updateNote(id, { status: "ready" });
+  }
+  if (md.includes("tool sync --all") && !has(thread, "--all")) {
+    const f = off("tool sync --all");
+    ed.ai.addNote({
+      from: f,
+      to: f + 15,
+      kind: "issue",
+      author: AGENT,
+      body: "`sync` has no `--all` flag (`src/commands/sync.ts`); it syncs every project by default.",
+      actions: [
+        {
+          label: "Apply fix",
+          primary: true,
+          run: (note, { review, editor }) => {
+            const i = editor.getMarkdown().indexOf(" --all", note.from);
+            if (i >= 0) review.suggest({ from: i, to: i + 6, text: "", author: AGENT, reason: "Remove the nonexistent flag." });
+            review.removeNote(note.id);
+            updateReview();
+          },
+        },
+        { label: "Open code", run: () => toast("The host app would open src/commands/sync.ts") },
+      ],
+    });
+  }
+  // new writing: a light generic pass so per-block review is visible on anything you type
+  const words = md.match(/\b(very|really|basically|just)\b/gi);
+  if (words && !has(thread, "Filler word")) {
+    const m = md.match(/\b(very|really|basically|just)\b/i)!;
+    ed.ai.setMarks(`style:${unit.id}`, [{ from: unit.from + m.index!, to: unit.from + m.index! + m[0].length, severity: "style", message: "Filler word: consider cutting it.", fixes: [{ label: "Remove", text: "" }] }]);
+  }
+  if (/\b(always|never)\b/i.test(md) && !has(thread, "Is this absolute")) {
+    const m = md.match(/\b(always|never)\b/i)!;
+    ed.ai.addNote({ from: unit.from + m.index!, to: unit.from + m.index! + m[0].length, kind: "question", author: AGENT, body: "Is this absolute? The code may have exceptions.", onReply: (a, n) => ed.ai.addReply(n.id, { author: AGENT, body: "Noted." }) });
+  }
+  updateReview();
+}
+
+// app-side cadence: review the AI section on open; afterwards every block the writer finishes
+setTimeout(() => {
+  for (const u of ed.ai.getUnits()) if (/retries failed|cached for an hour|tool sync --all/.test(u.markdown)) void reviewUnit(u);
+}, 900);
 
 function updateReview() {
   const n = ed.ai.getSuggestions().length;
@@ -250,4 +253,4 @@ $("#r-prev").onclick = () => (ed.ai.next(-1), updateReview());
 $("#r-accept").onclick = () => (ed.ai.acceptAll(), updateReview());
 $("#r-reject").onclick = () => (ed.ai.rejectAll(), updateReview());
 ed.root.addEventListener("click", () => setTimeout(updateReview, 0));
-for (const b of document.querySelectorAll<HTMLElement>(".review button, #t-review")) b.addEventListener("mousedown", (e) => e.preventDefault());
+for (const b of document.querySelectorAll<HTMLElement>(".review button")) b.addEventListener("mousedown", (e) => e.preventDefault());

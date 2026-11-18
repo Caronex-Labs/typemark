@@ -90,18 +90,19 @@ describe("notes (agent questions / issues)", () => {
       onReply,
       actions: [{ label: "Open code", run }],
     });
-    const note = el.querySelector<HTMLElement>(`.tm-phantom[data-id="${id}"]`)!;
-    expect(note.previousElementSibling!.textContent).toContain("caches results");
+    const note = el.querySelector<HTMLElement>(`.tm-ph-section[data-id="${id}"]`)!;
+    const card = note.closest<HTMLElement>(".tm-phantom")!;
+    expect(card.previousElementSibling!.textContent).toContain("caches results");
     expect(note.querySelector("code")!.textContent).toContain("src/cli.ts");
     expect(ed.getMarkdown()).toBe(md);
-    const ta = note.querySelector("textarea")!;
+    const ta = card.querySelector("textarea")!;
     ta.value = "Yes, --cache";
     ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
     await Promise.resolve();
     expect(onReply).toHaveBeenCalledWith("Yes, --cache", expect.objectContaining({ id }));
     ed.ai.addReply(id, { author: "Code checker", body: "Thanks, updated." });
-    expect(el.querySelectorAll(`.tm-phantom[data-id="${id}"] .tm-ph-reply`).length).toBe(2);
-    [...el.querySelectorAll<HTMLButtonElement>(`.tm-phantom[data-id="${id}"] .tm-btn`)].find((b) => b.textContent === "Open code")!.click();
+    expect(el.querySelectorAll(`.tm-ph-section[data-id="${id}"] .tm-ph-reply`).length).toBe(2);
+    [...el.querySelectorAll<HTMLButtonElement>(`.tm-ph-section[data-id="${id}"] .tm-btn`)].find((b) => b.textContent === "Open code")!.click();
     expect(run).toHaveBeenCalled();
     // typing elsewhere keeps the note anchored
     ed.replaceDoc(0, 0, "Hello. ");
@@ -183,4 +184,71 @@ describe("@ai instructions", () => {
     expect((other.el.children[0] as HTMLElement).dataset.aiStatus).toBe("error");
     expect(el.querySelector("[data-ai-status]")).toBeNull();
   });
+});
+
+describe("threads: one per unit", () => {
+  it("everything on a paragraph lands in one thread; agents can read it", () => {
+    const { el, ed } = mount("Alpha beta gamma.\n\nOther paragraph.");
+    ed.ai.suggestEdit(0, 17, "Alpha BETA gamma.", { author: "Style agent" });
+    ed.ai.addNote({ from: 6, to: 10, kind: "question", author: "Fact agent", body: "Is beta right?" });
+    ed.ai.addNote({ from: 0, to: 5, kind: "issue", author: "Style agent", body: "Alpha is vague." });
+    const t = ed.ai.getThread(3)!;
+    expect(t.open.suggestions.length).toBe(1);
+    expect(t.open.notes.map((n) => n.author)).toEqual(["Style agent", "Fact agent"]);
+    expect(t.history.map((e) => e.type)).toEqual(["suggestion", "note", "note"]);
+    // ONE card for the unit, holding both notes
+    expect(el.querySelectorAll(".tm-phantom").length).toBe(1);
+    expect(el.querySelectorAll(".tm-phantom .tm-ph-section").length).toBe(2);
+    expect(ed.ai.getThread(25)).toBeNull();
+    ed.ai.reject(t.open.suggestions[0].id);
+    expect(ed.ai.getThread(3)!.history.map((e) => e.type)).toEqual(["suggestion", "note", "note", "rejected"]);
+  });
+
+  it("a list (with nested items) is one unit and one thread", () => {
+    const { ed } = mount("Intro.\n\n- one\n  - one.a\n- two\n\nOutro.");
+    const units = ed.ai.getUnits();
+    expect(units.map((u) => u.markdown)).toEqual(["Intro.", "- one\n  - one.a\n- two", "Outro."]);
+    const md = ed.getMarkdown();
+    ed.ai.addNote({ from: md.indexOf("one.a"), to: md.indexOf("one.a") + 5, kind: "info", body: "a" });
+    ed.ai.addComment({ from: md.indexOf("two"), to: md.indexOf("two") + 3 });
+    const t = ed.ai.getThread(md.indexOf("- one"))!;
+    expect(t.history.map((e) => e.type)).toEqual(["note", "comment"]);
+    expect(ed.ai.getThreads().length).toBe(1);
+  });
+
+  it("merging two paragraphs merges their threads", () => {
+    const { ed } = mount("First.\n\nSecond.");
+    ed.ai.addNote({ from: 0, to: 5, kind: "info", body: "on first" });
+    ed.ai.addNote({ from: 8, to: 14, kind: "info", body: "on second" });
+    expect(ed.ai.getThreads().length).toBe(2);
+    ed.replaceDoc(6, 8, " ");
+    expect(ed.ai.getThreads().length).toBe(1);
+    expect(ed.ai.getThreads()[0].history.length).toBe(2);
+  });
+});
+
+describe("review cadence", () => {
+  it("dirty units + settle on idle", async () => {
+    vi.useFakeTimers();
+    const settled: string[] = [];
+    const { ed } = mount("One.\n\nTwo.", { ai: { settleMs: 100, onUnitSettled: (u: import("../src/ai").Unit, c: { reason: string }) => settled.push(`${u.markdown}:${c.reason}`) } });
+    ed.ai; // attach the layer
+    ed.replaceDoc(4, 4, " more", "type");
+    expect(ed.ai.getDirtyUnits().map((u) => u.markdown)).toEqual(["One. more"]);
+    vi.advanceTimersByTime(150);
+    expect(settled).toEqual(["One. more:idle"]);
+    expect(ed.ai.getDirtyUnits()).toEqual([]);
+    // AI edits do not count as writing
+    ed.ai.suggest({ from: 0, to: 3, text: "Uno" }).accept();
+    expect(ed.ai.getDirtyUnits()).toEqual([]);
+    vi.useRealTimers();
+  });
+});
+
+it("Enter at the end of a paragraph does not move the next paragraph's thread", () => {
+  const { ed } = mount("Intro.\n\nTarget paragraph.");
+  ed.ai.addNote({ from: 8, to: 14, kind: "info", body: "on target" });
+  ed.replaceDoc(6, 6, "\n\nNew words.");
+  expect(ed.ai.getThread(ed.getMarkdown().indexOf("New"))).toBeNull();
+  expect(ed.ai.getThread(ed.getMarkdown().indexOf("Target"))!.history.length).toBe(1);
 });

@@ -370,3 +370,23 @@
 .tm-editor .md-custom[data-ext="instruction"][data-ai-status="running"] { background-size: 200% 100%; animation: tm-shimmer 1.6s linear infinite;
   background-image: linear-gradient(90deg, color-mix(in srgb, var(--c) 8%, transparent), color-mix(in srgb, var(--c) 20%, transparent), color-mix(in srgb, var(--c) 8%, transparent)); }
 .tm-source-mode .md-custom[data-ext="instruction"]::after { content: none; }
+
+/* ---- one thread card per unit ---- */
+.tm-editor .tm-phantom-thread > .tm-ph-head .tm-ph-badge::before { content: "◆ "; }
+.tm-editor .tm-ph-count { color: var(--tm-meta); font-size: .95em; }
+.tm-editor .tm-ph-section { padding: .55em 0 .1em; }
+.tm-editor .tm-ph-section + .tm-ph-section, .tm-editor .tm-ph-head + .tm-ph-section ~ .tm-ph-section { border-top: 1px solid color-mix(in srgb, var(--c) 18%, transparent); }
+.tm-editor .tm-ph-section.tm-note-question { --s: var(--tm-q); } .tm-editor .tm-ph-section.tm-note-issue { --s: var(--tm-issue); }
+.tm-editor .tm-ph-section.tm-note-info { --s: var(--tm-info); } .tm-editor .tm-ph-section.tm-note-success { --s: var(--tm-ok); }
+.tm-editor .tm-ph-section.tm-ph-suggestion { --s: var(--tm-ins); }
+.tm-editor .tm-ph-section .tm-ph-badge { color: var(--s, var(--c)); }
+.tm-editor .tm-ph-section .tm-btn-primary { background: var(--s, var(--c)); }
+.tm-editor .tm-ph-section .tm-ph-head { margin-bottom: .25em; }
+.tm-editor .tm-ph-replyrow { padding-top: .6em; border-top: 1px solid color-mix(in srgb, var(--c) 18%, transparent); }
+.tm-btn-small { padding: .35em .6em !important; font-size: 11.5px !important; }
+.tm-editor .tm-ph-history { list-style: none; margin: .5em 0 0; padding: .5em 0 0; border-top: 1px dashed color-mix(in srgb, var(--c) 25%, transparent); font-size: .84em; }
+.tm-editor .tm-ph-history li { display: flex; gap: .5em; padding: .12em 0; color: var(--tm-quote); }
+.tm-editor .tm-ph-ev { font-weight: 600; text-transform: uppercase; font-size: .8em; letter-spacing: .04em; min-width: 6.5em; color: var(--tm-meta); }
+.tm-editor .tm-ph-history li[data-type="accepted"] .tm-ph-ev { color: var(--tm-ins); }
+.tm-editor .tm-ph-history li[data-type="rejected"] .tm-ph-ev, .tm-editor .tm-ph-history li[data-type="stale"] .tm-ph-ev { color: var(--tm-del); }
+.tm-editor .tm-ph-evtext { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

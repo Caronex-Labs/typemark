@@ -174,6 +174,7 @@ export class Editor {
     on("drop", (e) => this.onDropFiles(e));
     root.addEventListener("mousedown", (e) => this.onMouseDown(e), { signal: this.abort.signal });
     document.addEventListener("selectionchange", () => this.syncFocus(), { signal: this.abort.signal });
+    if (opts.ai) void this.ai; // start tracking activity right away when the host configured the AI layer
   }
 
   /** Remove every listener and leave the rendered (read-only) document in place. */

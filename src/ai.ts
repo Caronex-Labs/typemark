@@ -118,6 +118,8 @@ export interface InstructionJob {
   status: "running" | "done" | "error";
   /** Prompt context: text before/after, heading path. */
   context: ReturnType<AIReview["getContext"]>;
+  /** What already happened on this unit (other agents' suggestions and notes). */
+  thread: Thread | null;
   /** Replace the instruction with this markdown (as a suggestion, or applied when autoApply). */
   resolve(markdown: string, o?: { reason?: string }): void;
   /** Stream the replacement: returns a suggestion handle; call finish() at the end. */
@@ -128,7 +130,49 @@ export interface InstructionJob {
   ask(question: string, onAnswer: (answer: string) => void | Promise<void>): void;
 }
 
+/**
+ * A review unit: one block, or a tight run of blocks that belong together
+ * (list items incl. nested ones, consecutive quote lines). Every unit has
+ * at most ONE thread.
+ */
+export interface Unit {
+  /** Id of the unit's first block. */
+  id: string;
+  from: number;
+  to: number;
+  markdown: string;
+  blockIds: string[];
+}
+
+export type ThreadEventType = "suggestion" | "note" | "comment" | "mark" | "reply" | "accepted" | "rejected" | "stale" | "dismissed";
+
+export interface ThreadEvent {
+  type: ThreadEventType;
+  author?: string;
+  /** Human-readable summary ("\"3\" → \"5\"", the note body, the reply...). */
+  text: string;
+  itemId?: string;
+  time: number;
+}
+
+/** Everything that happened on one unit: what is open now and the full history. */
+export interface Thread {
+  id: string;
+  unit: Unit;
+  open: { suggestions: Suggestion[]; notes: Note[]; comments: Comment[]; marks: Mark[] };
+  history: ThreadEvent[];
+}
+
 export interface AIReviewOptions {
+  /**
+   * The writer finished with a unit they edited: they moved the caret to another unit
+   * ("left") or paused for settleMs ("idle"). Use it to schedule per-block reviews.
+   */
+  onUnitSettled?(unit: Unit, ctx: { reason: "left" | "idle"; thread: Thread | null; review: AIReview }): void;
+  /** Pause (ms) after which an edited unit counts as settled (default 2500; 0 = only on leave). */
+  settleMs?: number;
+  /** A reply typed in a thread card (the host forwards it to its agent). Falls back to the latest note's onReply. */
+  onThreadReply?(thread: Thread, text: string): void | Promise<void>;
   /**
    * An `@ai …` instruction was run (Enter at its end, or runInstructions()).
    * Hand it to your agent and call job.resolve / job.stream / job.fail / job.ask.
@@ -225,6 +269,9 @@ export function diffWords(a: string, b: string): { from: number; to: number; tex
 
 // ------------------------------------------------------------------ the layer
 
+/** A thread is keyed to the unit's first BLOCK ID (stable across edits); the offset is only a fallback. */
+type ThreadRec = { id: string; blockId: string; anchor: number; history: ThreadEvent[] };
+
 export class AIReview {
   private suggestions = new Map<string, Suggestion>();
   private notes = new Map<string, Note>();
@@ -237,6 +284,13 @@ export class AIReview {
   private applying = false;
   private unsub: (() => void)[] = [];
   private replyDrafts = new Map<string, string>();
+  private noteEvents = new Map<string, ThreadEvent>();
+  private knownMd = "";
+  private threads = new Map<string, ThreadRec>();
+  private dirty = new Set<number>();
+  private settleTimer = 0;
+  private caretUnit: string | null = null;
+  private openHistory = new Set<string>();
   private jobs = new Map<string, { id: string; from: number; to: number; status: InstructionJob["status"]; error?: string; agent: string }>();
 
   constructor(
@@ -245,20 +299,147 @@ export class AIReview {
   ) {
     this.unsub.push(
       editor.onDocChange((c) => this.map(c)),
-      editor.onRender(() => this.render()),
+      // the editor redraws BEFORE it reports the change: only draw once anchors are mapped
+      editor.onRender(() => editor.getMarkdown() === this.knownMd && this.render()),
       editor.onKey((e) => this.key(e)),
       editor.onPointer((e, off) => this.pointer(e, off)),
     );
     document.addEventListener("scroll", this.hideCard, true);
+    document.addEventListener("selectionchange", this.onSelection);
+    this.knownMd = editor.getMarkdown();
   }
 
   destroy(): void {
     this.unsub.forEach((u) => u());
     document.removeEventListener("scroll", this.hideCard, true);
+    document.removeEventListener("selectionchange", this.onSelection);
+    clearTimeout(this.settleTimer);
     this.card?.remove();
     this.clearDom();
     if (hasHighlights()) for (const n of HIGHLIGHTS) CSS.highlights.delete(n);
   }
+
+  // ---------------------------------------------------------------- units + threads
+
+  /** Review units of the document (blocks, with tight runs grouped). */
+  getUnits(): Unit[] {
+    const lay = this.editor.docLayout();
+    const blocks = this.editor.getBlocks();
+    const md = this.editor.getMarkdown();
+    const units: Unit[] = [];
+    blocks.forEach((b, i) => {
+      const l = lay[i];
+      const prev = units[units.length - 1];
+      const tight = i > 0 && l.start - lay[i - 1].end === 1; // "\n" separator = same list / quote run
+      if (prev && tight) {
+        prev.to = l.end;
+        prev.blockIds.push(b.id);
+      } else units.push({ id: b.id, from: l.start, to: l.end, markdown: "", blockIds: [b.id] });
+    });
+    for (const u of units) u.markdown = md.slice(u.from, u.to);
+    return units;
+  }
+
+  /** The unit containing a markdown offset (a block id is accepted too). */
+  unitAt(offsetOrBlockId: number | string): Unit | null {
+    const units = this.getUnits();
+    if (typeof offsetOrBlockId === "string") return units.find((u) => u.blockIds.includes(offsetOrBlockId)) ?? null;
+    return units.find((u) => u.from <= offsetOrBlockId && offsetOrBlockId <= u.to) ?? units.find((u) => offsetOrBlockId < u.from) ?? units[units.length - 1] ?? null;
+  }
+
+  /** The single thread for a unit (merging threads whose units were merged). Created on demand when `create`. */
+  private threadFor(unit: Unit, create: boolean): ThreadRec | null {
+    const ids = new Set(this.editor.getBlocks().map((b) => b.id));
+    const mine = [...this.threads.values()].filter((t) =>
+      ids.has(t.blockId) ? unit.blockIds.includes(t.blockId) : unit.from <= t.anchor && t.anchor <= unit.to,
+    );
+    if (mine.length > 1) {
+      const [keep, ...rest] = mine;
+      for (const t of rest) {
+        keep.history.push(...t.history);
+        this.threads.delete(t.id);
+      }
+      keep.history.sort((a, b) => a.time - b.time);
+    }
+    if (mine[0]) {
+      mine[0].blockId = unit.id;
+      mine[0].anchor = unit.from;
+      return mine[0];
+    }
+    if (!create) return null;
+    const t: ThreadRec = { id: uid("t"), blockId: unit.id, anchor: unit.from, history: [] };
+    this.threads.set(t.id, t);
+    return t;
+  }
+
+  private log(at: number, ev: Omit<ThreadEvent, "time">): ThreadEvent | null {
+    const unit = this.unitAt(at);
+    if (!unit) return null;
+    const e = { ...ev, time: Date.now() };
+    this.threadFor(unit, true)!.history.push(e);
+    return e;
+  }
+
+  /** The thread of the unit containing `at` (offset or block id), or null when nothing happened there. */
+  getThread(at: number | string): Thread | null {
+    const unit = this.unitAt(at);
+    if (!unit) return null;
+    const t = this.threadFor(unit, false);
+    if (!t) return null;
+    const inUnit = (x: { from: number }) => unit.from <= x.from && x.from <= unit.to;
+    return {
+      id: t.id,
+      unit,
+      history: t.history.slice(),
+      open: {
+        suggestions: this.getSuggestions().filter(inUnit),
+        notes: this.getNotes().filter(inUnit),
+        comments: this.getComments().filter(inUnit),
+        marks: this.getMarks().filter(inUnit),
+      },
+    };
+  }
+
+  getThreads(): Thread[] {
+    return this.getUnits()
+      .map((u) => this.getThread(u.id))
+      .filter((t): t is Thread => !!t);
+  }
+
+  // ---------------------------------------------------------------- cadence
+
+  /** Units edited by the writer since they were last reviewed. */
+  getDirtyUnits(): Unit[] {
+    const seen = new Set<string>();
+    const out: Unit[] = [];
+    for (const off of this.dirty) {
+      const u = this.unitAt(off);
+      if (u && !seen.has(u.id)) seen.add(u.id), out.push(u);
+    }
+    return out;
+  }
+
+  /** Mark a unit (offset / block id / Unit) as reviewed: it leaves getDirtyUnits(). */
+  markReviewed(at: number | string | Unit): void {
+    const u = typeof at === "object" ? at : this.unitAt(at);
+    if (!u) return;
+    for (const off of [...this.dirty]) if (u.from <= off && off <= u.to) this.dirty.delete(off);
+  }
+
+  private settle(unitId: string, reason: "left" | "idle"): void {
+    const u = this.getDirtyUnits().find((x) => x.id === unitId);
+    if (!u) return;
+    this.markReviewed(u);
+    this.opts.onUnitSettled?.(u, { reason, thread: this.getThread(u.id), review: this });
+  }
+
+  private onSelection = (): void => {
+    const sel = this.editor.getSelectionOffsets();
+    const u = sel ? this.unitAt(sel.from) : null;
+    const prev = this.caretUnit;
+    this.caretUnit = u?.id ?? null;
+    if (prev && prev !== this.caretUnit) this.settle(prev, "left");
+  };
 
   // ---------------------------------------------------------------- suggestions
 
@@ -294,6 +475,7 @@ export class AIReview {
       data: input.data,
     };
     this.suggestions.set(s.id, s);
+    this.log(s.from, { type: "suggestion", author: s.author, itemId: s.id, text: describe(s) });
     this.render();
     return this.handle(s.id);
   }
@@ -339,6 +521,7 @@ export class AIReview {
       const lead = text.length - text.trimStart().length;
       this.authored.push({ from: s.from + lead, to: s.from + text.length });
     }
+    this.log(s.from, { type: "accepted", author: s.author, itemId: s.id, text: describe(s) });
     this.opts.onAccept?.(s);
     this.render();
   }
@@ -348,6 +531,7 @@ export class AIReview {
     if (!s) return;
     this.suggestions.delete(id);
     this.hideCard();
+    this.log(s.from, { type: "rejected", author: s.author, itemId: s.id, text: describe(s) });
     this.opts.onReject?.(s);
     this.render();
   }
@@ -414,7 +598,10 @@ export class AIReview {
   addNote(input: Omit<Note, "id" | "status"> & { id?: string; streaming?: boolean }): string {
     const id = input.id ?? uid("n");
     const { streaming, ...rest } = input;
-    this.notes.set(id, { ...rest, id, status: streaming ? "streaming" : "ready" });
+    const note: Note = { ...rest, id, status: streaming ? "streaming" : "ready" };
+    this.notes.set(id, note);
+    const ev = this.log(note.from, { type: "note", author: note.author, itemId: id, text: note.body });
+    if (ev) this.noteEvents.set(id, ev);
     this.render();
     return id;
   }
@@ -430,6 +617,8 @@ export class AIReview {
   appendNote(id: string, chunk: string): void {
     const n = this.notes.get(id);
     if (n) (n.body += chunk), this.renderSoon();
+    const ev = this.noteEvents.get(id);
+    if (ev && n) ev.text = n.body;
   }
 
   /** Add a message to a note's thread (e.g. the agent's follow-up after a reply). */
@@ -437,11 +626,16 @@ export class AIReview {
     const n = this.notes.get(id);
     if (!n) return;
     (n.replies ??= []).push(reply);
+    this.log(n.from, { type: "reply", author: reply.author, itemId: id, text: reply.body });
     this.render();
   }
 
   removeNote(id: string): void {
-    if (this.notes.delete(id)) this.render();
+    const n = this.notes.get(id);
+    if (!n) return;
+    this.notes.delete(id);
+    this.log(n.from, { type: "dismissed", author: n.author, itemId: id, text: n.title ?? n.kind });
+    this.render();
   }
 
   getNotes(): Note[] {
@@ -491,6 +685,7 @@ export class AIReview {
         rec.status = v;
       },
       context: this.getContext({ from: ins.from, to: ins.to }),
+      thread: this.getThread(ins.from),
       resolve(markdown, o) {
         const h = self.suggest({ from: rec.from, to: rec.to, text: markdown, display: "block", author: rec.agent, reason: o?.reason });
         rec.status = "done";
@@ -532,6 +727,7 @@ export class AIReview {
     const id = c.id ?? uid("c");
     const md = this.editor.getMarkdown();
     this.comments.set(id, { id, from: c.from, to: c.to, quote: md.slice(c.from, c.to), data: c.data });
+    this.log(c.from, { type: "comment", itemId: id, text: md.slice(c.from, c.to) });
     this.render();
     return id;
   }
@@ -587,6 +783,7 @@ export class AIReview {
     for (const it of items) {
       const id = uid("m");
       this.marks.set(id, { ...it, id, source });
+      this.log(it.from, { type: "mark", author: source, itemId: id, text: it.message });
     }
     this.render();
   }
@@ -658,6 +855,15 @@ export class AIReview {
   // ---------------------------------------------------------------- anchor mapping
 
   private map(ch: DocChange): void {
+    this.knownMd = this.editor.getMarkdown();
+    try {
+      this.mapAnchors(ch);
+    } finally {
+      this.render();
+    }
+  }
+
+  private mapAnchors(ch: DocChange): void {
     if (ch.kind === "load") {
       this.suggestions.clear();
       this.notes.clear();
@@ -665,6 +871,8 @@ export class AIReview {
       this.authored = [];
       this.comments.clear();
       this.jobs.clear();
+      this.threads.clear();
+      this.dirty.clear();
       return;
     }
     const md = this.editor.getMarkdown();
@@ -676,6 +884,7 @@ export class AIReview {
       if (s.to < s.from) s.to = s.from;
       if ((touched && md.slice(s.from, s.to) !== s.original) || md.slice(s.from, s.to) !== s.original) {
         this.suggestions.delete(s.id);
+        this.log(s.from, { type: "stale", author: s.author, itemId: s.id, text: describe(s) });
         this.opts.onStale?.(s);
       }
     }
@@ -685,6 +894,15 @@ export class AIReview {
       n.detached = t <= f && n.to > n.from;
       n.from = f;
       n.to = Math.max(f, t);
+    }
+    for (const t of this.threads.values()) t.anchor = mapOffset(t.anchor, ch, -1);
+    this.dirty = new Set([...this.dirty].map((o) => mapOffset(o, ch, -1)));
+    if (ch.kind !== "ai" && !this.applying) {
+      this.dirty.add(ch.from);
+      clearTimeout(this.settleTimer);
+      const ms = this.opts.settleMs ?? 2500;
+      const unit = this.unitAt(ch.from);
+      if (ms > 0 && unit) this.settleTimer = window.setTimeout(() => this.settle(this.unitAt(ch.from)?.id ?? unit.id, "idle"), ms);
     }
     for (const j of [...this.jobs.values()]) {
       j.from = mapOffset(j.from, ch, 1);
@@ -780,8 +998,17 @@ export class AIReview {
 
     // 3) phantom blocks: block suggestions and notes, after the block holding their anchor
     const phantoms: { at: number; el: HTMLElement }[] = [];
-    for (const s of this.suggestions.values()) if (s.display === "block") phantoms.push({ at: s.to, el: this.blockSuggestionEl(s) });
-    for (const n of this.notes.values()) phantoms.push({ at: n.to, el: this.noteEl(n) });
+    const byUnit = new Map<string, { unit: Unit; notes: Note[]; blocks: Suggestion[] }>();
+    const units = this.getUnits();
+    const unitOf = (off: number) => units.find((u) => u.from <= off && off <= u.to) ?? units[units.length - 1];
+    const bucket = (off: number) => {
+      const u = unitOf(off);
+      if (!byUnit.has(u.id)) byUnit.set(u.id, { unit: u, notes: [], blocks: [] });
+      return byUnit.get(u.id)!;
+    };
+    for (const s of this.suggestions.values()) if (s.display === "block") bucket(s.from).blocks.push(s);
+    for (const n of this.notes.values()) bucket(n.from).notes.push(n);
+    for (const g of byUnit.values()) phantoms.push({ at: g.unit.to, el: this.threadEl(g.unit, g.notes, g.blocks) });
     phantoms.sort((a, b) => a.at - b.at);
     for (const p of phantoms) {
       const pt = this.editor.domPointAt(p.at);
@@ -821,8 +1048,87 @@ export class AIReview {
     );
   }
 
+  private threadEl(unit: Unit, notes: Note[], blocks: Suggestion[]): HTMLElement {
+    const t = this.threadFor(unit, true)!;
+    const el = phantomShell("thread", t.id);
+    const kinds = new Set(notes.map((n) => n.kind));
+    const main = kinds.has("issue") ? "issue" : kinds.has("question") ? "question" : notes.length ? notes[0].kind : null;
+    el.classList.add(main ? `tm-note-${main}` : "tm-phantom-suggestion");
+    if ([...notes, ...blocks].some((x) => x.status === "streaming")) el.classList.add("tm-streaming");
+    const authors = [...new Set([...notes.map((n) => n.author), ...blocks.map((b) => b.author)].filter(Boolean))] as string[];
+    const inline = this.getSuggestions().filter((s) => s.display === "inline" && unit.from <= s.from && s.from <= unit.to).length;
+    const head = document.createElement("div");
+    head.className = "tm-ph-head";
+    head.innerHTML =
+      `<span class="tm-ph-badge tm-ph-thread">Thread</span>` +
+      (authors.length ? `<span class="tm-ph-author">${escHtml(authors.join(", "))}</span>` : "") +
+      (inline ? `<span class="tm-ph-count">${inline} inline edit${inline > 1 ? "s" : ""}</span>` : "") +
+      `<span class="tm-ph-spacer"></span>`;
+    if (t.history.length) {
+      const hb = button(this.openHistory.has(t.id) ? "Hide history" : `History (${t.history.length})`, false, () => {
+        if (this.openHistory.has(t.id)) this.openHistory.delete(t.id);
+        else this.openHistory.add(t.id);
+        this.render();
+      });
+      hb.classList.add("tm-btn-small");
+      head.append(hb);
+    }
+    el.append(head);
+    for (const n of notes.sort((a, b) => a.from - b.from)) el.append(this.noteEl(n));
+    for (const s of blocks) el.append(this.blockSuggestionEl(s));
+    if (authors.length === 1) for (const a of el.querySelectorAll(".tm-ph-section .tm-ph-head .tm-ph-author")) a.remove(); // one author: named once
+    if (this.openHistory.has(t.id)) {
+      const h = document.createElement("ol");
+      h.className = "tm-ph-history";
+      h.innerHTML = t.history
+        .map((e) => `<li data-type="${e.type}"><span class="tm-ph-ev">${e.type}</span>${e.author ? `<span class="tm-ph-author">${escHtml(e.author)}</span>` : ""}<span class="tm-ph-evtext">${escHtml(e.text.slice(0, 160))}</span></li>`)
+        .join("");
+      el.append(h);
+    }
+    // ONE reply box per thread
+    const replyTarget = [...notes].reverse().find((n) => n.onReply);
+    if (this.opts.onThreadReply || replyTarget) {
+      const row = document.createElement("div");
+      row.className = "tm-ph-actions tm-ph-replyrow";
+      const ta = document.createElement("textarea");
+      ta.className = "tm-ph-input";
+      ta.rows = 1;
+      ta.dataset.note = t.id;
+      ta.placeholder = replyTarget?.replyPlaceholder ?? "Reply to this thread…";
+      ta.setAttribute("aria-label", "Reply to this thread");
+      ta.value = this.replyDrafts.get(t.id) ?? "";
+      const send = async () => {
+        const text = ta.value.trim();
+        if (!text) return;
+        this.replyDrafts.delete(t.id);
+        t.history.push({ type: "reply", author: "You", text, time: Date.now() });
+        if (replyTarget) (replyTarget.replies ??= []).push({ author: "You", body: text });
+        this.render();
+        const thread = this.getThread(unit.id)!;
+        if (this.opts.onThreadReply) await this.opts.onThreadReply(thread, text);
+        else await replyTarget!.onReply!(text, replyTarget!);
+      };
+      ta.addEventListener("keydown", (e) => {
+        e.stopPropagation();
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          void send();
+        }
+      });
+      ta.addEventListener("input", () => {
+        ta.style.height = "auto";
+        ta.style.height = `${ta.scrollHeight}px`;
+      });
+      for (const ev of ["beforeinput", "input", "paste", "cut", "copy", "mousedown"]) ta.addEventListener(ev, (e) => e.stopPropagation());
+      row.append(ta, button("Send", true, () => void send()));
+      el.append(row);
+    }
+    el.setAttribute("aria-label", `Review thread: ${notes.length} note${notes.length === 1 ? "" : "s"}, ${blocks.length + inline} suggestion${blocks.length + inline === 1 ? "" : "s"}`);
+    return el;
+  }
+
   private blockSuggestionEl(s: Suggestion): HTMLElement {
-    const el = phantomShell("suggestion", s.id);
+    const el = section("suggestion", s.id);
     el.dataset.sid = s.id;
     if (s.status === "streaming") el.classList.add("tm-streaming");
     const body = s.text.replace(/^\n+/, "");
@@ -841,7 +1147,7 @@ export class AIReview {
   }
 
   private noteEl(n: Note): HTMLElement {
-    const el = phantomShell("note", n.id);
+    const el = section("note", n.id);
     el.classList.add(`tm-note-${n.kind}`);
     if (n.status === "streaming") el.classList.add("tm-streaming");
     if (n.detached) el.classList.add("tm-detached");
@@ -856,36 +1162,6 @@ export class AIReview {
         .join("") +
       `<div class="tm-ph-actions"></div>`;
     const actions = el.querySelector<HTMLElement>(".tm-ph-actions")!;
-    if (n.onReply) {
-      const ta = document.createElement("textarea");
-      ta.className = "tm-ph-input";
-      ta.rows = 1;
-      ta.dataset.note = n.id;
-      ta.placeholder = n.replyPlaceholder ?? "Reply…";
-      ta.setAttribute("aria-label", `Reply to ${labels[n.kind].toLowerCase()}`);
-      ta.value = this.replyDrafts.get(n.id) ?? "";
-      const send = async () => {
-        const text = ta.value.trim();
-        if (!text) return;
-        this.replyDrafts.delete(n.id);
-        (n.replies ??= []).push({ author: "You", body: text });
-        this.render();
-        await n.onReply!(text, n);
-      };
-      ta.addEventListener("keydown", (e) => {
-        e.stopPropagation();
-        if (e.key === "Enter" && !e.shiftKey) {
-          e.preventDefault();
-          void send();
-        }
-      });
-      ta.addEventListener("input", () => {
-        ta.style.height = "auto";
-        ta.style.height = `${ta.scrollHeight}px`;
-      });
-      for (const ev of ["beforeinput", "input", "paste", "cut", "copy", "mousedown"]) ta.addEventListener(ev, (e) => e.stopPropagation());
-      actions.append(ta, button("Send", true, () => void send()));
-    }
     for (const a of n.actions ?? []) actions.append(button(a.label, !!a.primary, () => void a.run(n, { review: this, editor: this.editor })));
     actions.append(
       button("Dismiss", false, () => {
@@ -1037,6 +1313,19 @@ const HIGHLIGHTS = [
   "tm-mark-style",
   "tm-authored",
 ];
+
+function section(kind: string, id: string): HTMLElement {
+  const el = document.createElement("section");
+  el.className = `tm-ph-section tm-ph-${kind}`;
+  el.dataset.id = id;
+  return el;
+}
+
+function describe(s: Suggestion): string {
+  const o = s.original.length > 80 ? s.original.slice(0, 77) + "…" : s.original;
+  const t = s.text.length > 80 ? s.text.slice(0, 77) + "…" : s.text;
+  return s.from === s.to ? `+ "${t.trim()}"` : s.text ? `"${o}" → "${t.trim()}"` : `− "${o}"`;
+}
 
 function phantomShell(kind: string, id: string): HTMLElement {
   const el = document.createElement("div");

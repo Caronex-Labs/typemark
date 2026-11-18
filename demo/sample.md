@@ -60,7 +60,7 @@ const editor = createEditor(el, { value, onChange });
 
 ## AI review on top of your writing
 
-Press **Review** in the top bar: a mock docs agent checks this section against "the code" and answers with suggested edits, questions and issues, all anchored to the text below. Nothing changes until you accept.
+A mock docs agent reviews each block **when you finish writing it** (move on, or pause). On open it checks this section against "the code". Everything one block gets lands in **one thread**, which every agent reads first. Nothing changes until you accept. Try writing a sentence with *very* or *always* below.
 
 The CLI retries failed requests 3 times and waits 10 seconds between attempts.
 
