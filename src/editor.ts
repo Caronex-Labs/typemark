@@ -18,6 +18,7 @@ import { SuggestItem, Suggester, matchBlockExt, registerExtension, registry } fr
 import { coreExtensions } from "./extensions";
 import { SuggestMenu } from "./suggest";
 import { AIReview, AIReviewOptions } from "./ai";
+import { Finder } from "./find";
 import { DocumentMetadata, extractMetadata } from "./metadata";
 import { FenceRenderer, registerFenceRenderer } from "./preview";
 import { EmbedPolicy, altFromName, buildEmbed, defaultEmbedPolicy, embedHtmlFor, fileToDataUrl, mdUrl } from "./media";
@@ -45,6 +46,8 @@ export interface EditorOptions {
   resolveImageUrl?: (src: string) => string;
   /** Which iframe/video/audio sources may load. Default: https, not this page's origin. */
   embedPolicy?: EmbedPolicy;
+  /** Built-in find & replace panel and Cmd/Ctrl+F shortcut (default true). */
+  find?: boolean;
   /** Options for the AI review layer (editor.ai). */
   ai?: AIReviewOptions;
   /** Register the built-in syntax extensions (@[](url) embeds, [toc], callouts, / menu). Default true. */
@@ -174,7 +177,8 @@ export class Editor {
     on("drop", (e) => this.onDropFiles(e));
     root.addEventListener("mousedown", (e) => this.onMouseDown(e), { signal: this.abort.signal });
     document.addEventListener("selectionchange", () => this.syncFocus(), { signal: this.abort.signal });
-    if (opts.ai) void this.ai; // start tracking activity right away when the host configured the AI layer
+    if (opts.ai) void this.ai;
+    if (opts.find !== false) void this.find; // start tracking activity right away when the host configured the AI layer
   }
 
   /** Remove every listener and leave the rendered (read-only) document in place. */
@@ -182,6 +186,7 @@ export class Editor {
     this.abort.abort();
     this.menu.destroy();
     this._ai?.destroy();
+    this._find?.destroy();
     for (const el of this.els.values()) el._cleanup?.();
     this.applyFocus(null);
     this.root.contentEditable = "false";
@@ -361,7 +366,7 @@ export class Editor {
     const a = this.offsetToPos(from);
     const b = this.offsetToPos(to);
     this.setCaret(a, from === to ? undefined : b);
-    this.els.get(a.bid)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    this.els.get(a.bid)?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
   }
 
   /** Restore a selection by markdown offsets without scrolling (overlay re-renders). */
@@ -398,6 +403,12 @@ export class Editor {
   /** Block element by id (for overlays). */
   blockElement(id: string): HTMLElement | undefined {
     return this.els.get(id);
+  }
+
+  private _find?: Finder;
+  /** Find & replace (Cmd/Ctrl+F). Created on first use; the shortcut works from the start. */
+  get find(): Finder {
+    return (this._find ??= new Finder(this));
   }
 
   private _ai?: AIReview;
@@ -475,7 +486,7 @@ export class Editor {
   revealBlock(id: string): void {
     const el = this.els.get(id);
     if (!el) return;
-    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    el.scrollIntoView?.({ block: "center", behavior: "smooth" });
     this.root.focus();
     this.setCaret({ bid: id, off: this.block(id)!.src.length });
   }
@@ -1274,7 +1285,7 @@ export class Editor {
       e.preventDefault();
       const def = this.root.querySelector<HTMLElement>(`[data-type="footnote"][data-fn="${CSS.escape(fn.dataset.fn!)}"]`);
       if (def) {
-        def.scrollIntoView({ block: "center", behavior: "smooth" });
+        def.scrollIntoView?.({ block: "center", behavior: "smooth" });
         this.setCaret({ bid: def.dataset.bid!, off: this.block(def.dataset.bid!)!.src.length });
       }
       return;

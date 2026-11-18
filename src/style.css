@@ -390,3 +390,32 @@
 .tm-editor .tm-ph-history li[data-type="accepted"] .tm-ph-ev { color: var(--tm-ins); }
 .tm-editor .tm-ph-history li[data-type="rejected"] .tm-ph-ev, .tm-editor .tm-ph-history li[data-type="stale"] .tm-ph-ev { color: var(--tm-del); }
 .tm-editor .tm-ph-evtext { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- find & replace ---- */
+::highlight(tm-find) { background-color: rgba(212, 167, 44, .35); }
+::highlight(tm-find-current) { background-color: rgba(255, 150, 0, .75); color: #000; }
+.tm-find {
+  position: fixed; top: 64px; right: 16px; z-index: 1000; width: min(460px, calc(100vw - 32px)); box-sizing: border-box;
+  background: var(--tm-bg, #fff); color: var(--tm-fg, #333); border: 1px solid var(--tm-border, #ddd); border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(0,0,0,.16); padding: 6px; font: 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.tm-find[hidden] { display: none; }
+.tm-find-row { display: flex; align-items: center; gap: 4px; }
+.tm-find-rrow { display: none; margin-top: 6px; }
+.tm-find.tm-find-replace .tm-find-rrow { display: flex; }
+.tm-find.tm-find-replace .tm-find-toggle { transform: rotate(90deg); }
+.tm-find input {
+  flex: 1; min-width: 0; font: inherit; color: inherit; background: color-mix(in srgb, var(--tm-fg, #333) 5%, transparent);
+  border: 1px solid transparent; border-radius: 6px; padding: 7px 8px; outline: none;
+}
+.tm-find input:focus { border-color: var(--tm-accent, #4183c4); }
+.tm-find.tm-find-none .tm-find-q { border-color: #cf222e; }
+.tm-find button {
+  font: inherit; color: inherit; background: transparent; border: 0; border-radius: 6px; padding: 6px 7px; cursor: pointer; min-width: 26px;
+}
+.tm-find button:hover { background: color-mix(in srgb, var(--tm-fg, #333) 9%, transparent); }
+.tm-find button[aria-pressed="true"] { background: color-mix(in srgb, var(--tm-accent, #4183c4) 22%, transparent); color: var(--tm-accent, #4183c4); }
+.tm-find button:focus-visible { outline: 2px solid var(--tm-accent, #4183c4); }
+.tm-find-toggle { transition: transform .15s; }
+.tm-find-spacer { width: 30px; flex: none; }
+.tm-find-count { color: var(--tm-meta, #999); font-size: 12px; white-space: nowrap; min-width: 58px; text-align: right; font-variant-numeric: tabular-nums; }

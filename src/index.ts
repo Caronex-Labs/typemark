@@ -42,3 +42,5 @@ export type { Unit, Thread, ThreadEvent, ThreadEventType, InstructionJob, AIRevi
 export type { DocChange } from "./editor";
 export { extractMetadata, buildBacklinks } from "./metadata";
 export type { DocumentMetadata, Backlink, Located } from "./metadata";
+export { Finder } from "./find";
+export type { FindOptions, FindMatch } from "./find";

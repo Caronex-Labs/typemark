@@ -65,7 +65,7 @@ export class SuggestMenu {
   private move(d: number): void {
     this.active = (this.active + d + this.items.length) % this.items.length;
     this.render();
-    this.el.querySelector(".tm-suggest-active")?.scrollIntoView({ block: "nearest" });
+    this.el.querySelector(".tm-suggest-active")?.scrollIntoView?.({ block: "nearest" });
   }
 
   private render(): void {
