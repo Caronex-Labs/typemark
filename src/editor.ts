@@ -18,6 +18,7 @@ import { SuggestItem, Suggester, matchBlockExt, registerExtension, registry } fr
 import { coreExtensions } from "./extensions";
 import { SuggestMenu } from "./suggest";
 import { AIReview, AIReviewOptions } from "./ai";
+import { DocumentMetadata, extractMetadata } from "./metadata";
 import { FenceRenderer, registerFenceRenderer } from "./preview";
 import { EmbedPolicy, altFromName, buildEmbed, defaultEmbedPolicy, embedHtmlFor, fileToDataUrl, mdUrl } from "./media";
 import { Pos, blockElOf, domPoint, placeCaret, posOf, sourceText } from "./caret";
@@ -476,6 +477,11 @@ export class Editor {
     el.scrollIntoView({ block: "center", behavior: "smooth" });
     this.root.focus();
     this.setCaret({ bid: id, off: this.block(id)!.src.length });
+  }
+
+  /** Everything known about the document: properties, outline, tasks, tags, links... (see extractMetadata). */
+  getMetadata(): DocumentMetadata {
+    return extractMetadata(this.getMarkdown());
   }
 
   /** Front matter (`---` YAML at the top) as raw text and a shallow key/value read. */

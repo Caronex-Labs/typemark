@@ -40,3 +40,5 @@ export type { LinkerOptions, ButtonSpec } from "./extensions";
 export { AIReview, createReview, diffWords, mapOffset, renderMarkdown } from "./ai";
 export type { InstructionJob, AIReviewOptions, Suggestion, SuggestionHandle, SuggestionDisplay, Note, NoteKind, NoteAction, Comment, Mark, MarkSeverity } from "./ai";
 export type { DocChange } from "./editor";
+export { extractMetadata, buildBacklinks } from "./metadata";
+export type { DocumentMetadata, Backlink, Located } from "./metadata";
