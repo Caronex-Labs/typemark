@@ -29,6 +29,7 @@ export {
   embedExtension,
   tocExtension,
   calloutExtension,
+  instructionExtension,
   slashMenu,
   wikilinks,
   tags,
@@ -36,3 +37,6 @@ export {
   actionButtons,
 } from "./extensions";
 export type { LinkerOptions, ButtonSpec } from "./extensions";
+export { AIReview, createReview, diffWords, mapOffset, renderMarkdown } from "./ai";
+export type { InstructionJob, AIReviewOptions, Suggestion, SuggestionHandle, SuggestionDisplay, Note, NoteKind, NoteAction, Comment, Mark, MarkSeverity } from "./ai";
+export type { DocChange } from "./editor";

@@ -58,6 +58,20 @@ $$
 const editor = createEditor(el, { value, onChange });
 ```
 
+## AI review on top of your writing
+
+Press **Review** in the top bar: a mock docs agent checks this section against "the code" and answers with suggested edits, questions and issues, all anchored to the text below. Nothing changes until you accept.
+
+The CLI retries failed requests 3 times and waits 10 seconds between attempts.
+
+Results are cached for an hour in `~/.cache/tool`.
+
+Run `tool sync --all` to sync every project in the workspace.
+
+Or delegate writing: a line starting with `@ai` is an instruction for an agent. Put the caret at the end of the next line and press **Enter**:
+
+@ai Add a diagram here that explains the retry behaviour described above
+
 ## Your app decides what things do
 
 Links to notes like [[Project ideas]] or [[Missing page]], tags like #inbox, and mentions like @sam are extensions: the host app supplies what happens on Cmd+click and what `[[`, `#` and `@` autocomplete with.

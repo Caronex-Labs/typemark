@@ -132,6 +132,7 @@ const SLASH: (Omit<SuggestItem, "apply"> & { ins: Ins })[] = [
   { icon: "≡", label: "Table of contents", detail: "[toc]", keywords: "outline toc", ins: { text: "[toc]" } },
   { icon: "—", label: "Divider", detail: "---", keywords: "hr rule separator", ins: { text: "---", block: true } },
   { icon: "¹", label: "Footnote", detail: "[^1]", keywords: "reference note", ins: { text: "[^1]" } },
+  { icon: "✦", label: "Ask AI to write here", detail: "@ai ", keywords: "ai agent instruction generate prompt", ins: { text: "@ai " } },
 ];
 
 /** Slash menu. Every item inserts the markdown it stands for; `extra` items from the host are appended. */
@@ -151,7 +152,28 @@ export function slashMenu(extra: SuggestItem[] = []): Extension {
   };
 }
 
-export const coreExtensions: Extension[] = [embedExtension, tocExtension, calloutExtension, slashMenu()];
+// ---------------------------------------------------------------- @ai instructions
+
+/**
+ * `@ai <instruction>` or `@ai(agent) <instruction>`: a block addressed to an AI agent.
+ * It stays in the markdown until the host's agent replaces it (see editor.ai.onInstruction).
+ */
+export const INSTRUCTION = /^@ai(?:\(([\w-]+)\))?:? /;
+
+export const instructionExtension: Extension = {
+  name: "instruction",
+  blocks: [
+    {
+      kind: "prefix",
+      name: "instruction",
+      prefix: INSTRUCTION,
+      data: (src) => ({ agent: src.match(INSTRUCTION)?.[1] ?? "ai" }),
+      continuation: () => null,
+    },
+  ],
+};
+
+export const coreExtensions: Extension[] = [embedExtension, tocExtension, calloutExtension, instructionExtension, slashMenu()];
 
 // ---------------------------------------------------------------- opt-in: [[wikilinks]], #tags, @mentions
 

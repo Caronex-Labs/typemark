@@ -11,14 +11,16 @@
  * undo) never go through the browser; they are model operations.
  */
 import { readFrontmatter } from "./block";
+import { separator } from "./block";
 import { Block, BlockType, blockType, continuation, fenceInfo, indentOf, mkBlock, parse, pipesOf, prefixLen, renderBlock, serialize } from "./block";
 import "./math";
 import { SuggestItem, Suggester, matchBlockExt, registerExtension, registry } from "./extension";
 import { coreExtensions } from "./extensions";
 import { SuggestMenu } from "./suggest";
+import { AIReview, AIReviewOptions } from "./ai";
 import { FenceRenderer, registerFenceRenderer } from "./preview";
 import { EmbedPolicy, altFromName, buildEmbed, defaultEmbedPolicy, embedHtmlFor, fileToDataUrl, mdUrl } from "./media";
-import { Pos, blockElOf, placeCaret, posOf, sourceText } from "./caret";
+import { Pos, blockElOf, domPoint, placeCaret, posOf, sourceText } from "./caret";
 
 export interface EditorOptions {
   /** Initial markdown. */
@@ -42,6 +44,8 @@ export interface EditorOptions {
   resolveImageUrl?: (src: string) => string;
   /** Which iframe/video/audio sources may load. Default: https, not this page's origin. */
   embedPolicy?: EmbedPolicy;
+  /** Options for the AI review layer (editor.ai). */
+  ai?: AIReviewOptions;
   /** Register the built-in syntax extensions (@[](url) embeds, [toc], callouts, / menu). Default true. */
   coreExtensions?: boolean;
   /** Fence renderers by language, e.g. { mermaid: mermaidRenderer(() => import("mermaid")) }. Registered globally. */
@@ -92,6 +96,15 @@ interface Snapshot {
 
 let coreRegistered = false;
 
+/** One document change in markdown offsets: [from, oldTo) became [from, newTo). */
+export interface DocChange {
+  from: number;
+  oldTo: number;
+  newTo: number;
+  /** "type" | "edit" | "undo" | "load" | ... */
+  kind: string;
+}
+
 type BlockEl = HTMLElement & { _html?: string; _cleanup?: () => void };
 
 /** data-* of an inline extension element, minus engine bookkeeping. */
@@ -118,6 +131,13 @@ export class Editor {
   private suggest: { bid: string; start: number; sg: Suggester; token: number } | null = null;
   private suggestToken = 0;
   private dismissed = "";
+  private lastMd = "";
+  private txDepth = 0;
+  private txPushed = false;
+  private changeHooks: ((c: DocChange) => void)[] = [];
+  private renderHooks: (() => void)[] = [];
+  private keyHooks: ((e: KeyboardEvent) => boolean)[] = [];
+  private pointerHooks: ((e: MouseEvent, offset: number | null) => boolean)[] = [];
 
   constructor(root: HTMLElement, opts: EditorOptions = {}) {
     this.root = root;
@@ -159,6 +179,7 @@ export class Editor {
   destroy(): void {
     this.abort.abort();
     this.menu.destroy();
+    this._ai?.destroy();
     for (const el of this.els.values()) el._cleanup?.();
     this.applyFocus(null);
     this.root.contentEditable = "false";
@@ -179,6 +200,7 @@ export class Editor {
     this.current = this.snapshot(null);
     this.undoStack = [];
     this.redoStack = [];
+    if (this.changeHooks) this.emitChange("load");
     this.emitState();
   }
 
@@ -289,6 +311,125 @@ export class Editor {
         return this.after({ bid: nb.id, off: cmd.type === "table" ? 2 : src.indexOf("\n") + 1 });
       }
     }
+  }
+
+  // ---------- document offsets (markdown string positions) ----------
+
+  /** Each block's [start, end) in getMarkdown(). */
+  docLayout(): { id: string; start: number; end: number }[] {
+    const out: { id: string; start: number; end: number }[] = [];
+    let at = 0;
+    this.blocks.forEach((b, i) => {
+      if (i > 0) at += separator(this.blocks[i - 1].src, b.src).length;
+      out.push({ id: b.id, start: at, end: at + b.src.length });
+      at += b.src.length;
+    });
+    return out;
+  }
+
+  /** Markdown offset -> (block, offset). Offsets in a separator snap to the next block. */
+  offsetToPos(offset: number): { bid: string; off: number } {
+    const lay = this.docLayout();
+    for (const l of lay) if (offset <= l.end) return { bid: l.id, off: Math.max(0, offset - l.start) };
+    const last = lay[lay.length - 1];
+    return { bid: last.id, off: last.end - last.start };
+  }
+
+  posToOffset(p: { bid: string; off: number }): number {
+    const l = this.docLayout().find((x) => x.id === p.bid);
+    return l ? l.start + p.off : 0;
+  }
+
+  /** Markdown offsets of the current selection, or null. */
+  getSelectionOffsets(): { from: number; to: number } | null {
+    const sel = this.getSel();
+    if (!sel) return null;
+    const a = this.posToOffset(sel.start);
+    const b = this.posToOffset(sel.end);
+    return { from: Math.min(a, b), to: Math.max(a, b) };
+  }
+
+  /** Replace markdown [from, to) with text as ONE undoable edit. */
+  replaceDoc(from: number, to: number, text: string, kind = "edit"): void {
+    this.replaceRange(this.offsetToPos(from), this.offsetToPos(to), text, kind);
+  }
+
+  /** Select markdown [from, to) and scroll it into view. */
+  selectDoc(from: number, to = from): void {
+    const a = this.offsetToPos(from);
+    const b = this.offsetToPos(to);
+    this.setCaret(a, from === to ? undefined : b);
+    this.els.get(a.bid)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+
+  /** Restore a selection by markdown offsets without scrolling (overlay re-renders). */
+  selectDocQuiet(from: number, to = from): void {
+    const a = this.offsetToPos(from);
+    const b = this.offsetToPos(to);
+    const el = this.els.get(a.bid);
+    const elB = this.els.get(b.bid);
+    if (!el || !elB) return;
+    placeCaret(el, a.off, from === to ? undefined : { el: elB, off: b.off });
+  }
+
+  /** DOM point for a markdown offset (for overlays). */
+  domPointAt(offset: number): { node: Node; offset: number; block: HTMLElement } | null {
+    const p = this.offsetToPos(offset);
+    const el = this.els.get(p.bid);
+    if (!el) return null;
+    return { ...domPoint(el, p.off), block: el };
+  }
+
+  /** Markdown offset under a viewport point. */
+  offsetAtPoint(x: number, y: number): number | null {
+    const doc = document as Document & { caretPositionFromPoint?(x: number, y: number): { offsetNode: Node; offset: number } | null };
+    const cp = doc.caretPositionFromPoint?.(x, y);
+    let p: Pos | null = null;
+    if (cp) p = posOf(this.root, cp.offsetNode, cp.offset);
+    else {
+      const r = document.caretRangeFromPoint?.(x, y);
+      if (r) p = posOf(this.root, r.startContainer, r.startOffset);
+    }
+    return p ? this.posToOffset(p) : null;
+  }
+
+  /** Block element by id (for overlays). */
+  blockElement(id: string): HTMLElement | undefined {
+    return this.els.get(id);
+  }
+
+  private _ai?: AIReview;
+  /** Review layer for AI collaborators (suggested edits, notes, comments, marks). Created on first use. */
+  get ai(): AIReview {
+    return (this._ai ??= new AIReview(this, this.opts.ai));
+  }
+
+  /** Run several edits as ONE undo step. */
+  transact(fn: () => void): void {
+    if (this.txDepth++ === 0) this.txPushed = false;
+    try {
+      fn();
+    } finally {
+      this.txDepth--;
+    }
+  }
+
+  /** Low-level hooks used by layers such as editor.ai. Each returns an unsubscribe function. */
+  onDocChange(h: (c: DocChange) => void): () => void {
+    this.changeHooks.push(h);
+    return () => this.changeHooks.splice(this.changeHooks.indexOf(h), 1);
+  }
+  onRender(h: () => void): () => void {
+    this.renderHooks.push(h);
+    return () => this.renderHooks.splice(this.renderHooks.indexOf(h), 1);
+  }
+  onKey(h: (e: KeyboardEvent) => boolean): () => void {
+    this.keyHooks.push(h);
+    return () => this.keyHooks.splice(this.keyHooks.indexOf(h), 1);
+  }
+  onPointer(h: (e: MouseEvent, offset: number | null) => boolean): () => void {
+    this.pointerHooks.push(h);
+    return () => this.pointerHooks.splice(this.pointerHooks.indexOf(h), 1);
   }
 
   // ---------- document / block API (for hosts and extensions) ----------
@@ -519,6 +660,7 @@ export class Editor {
       }
     }
     this.root.classList.toggle("tm-empty", this.blocks.length === 1 && this.blocks[0].src === "");
+    for (const h of this.renderHooks ?? []) h();
   }
 
   // ---------- caret / focus ----------
@@ -596,14 +738,16 @@ export class Editor {
 
   private commit(kind: string, caret: Pos | null): void {
     const now = Date.now();
-    const coalesce = kind === "type" && this.lastKind === "type" && now - this.lastTime < 1000;
+    const coalesce = (kind === "type" && this.lastKind === "type" && now - this.lastTime < 1000) || (this.txDepth > 0 && this.txPushed);
     if (!coalesce) this.undoStack.push(this.current);
+    if (this.txDepth > 0) this.txPushed = true;
     if (this.undoStack.length > 500) this.undoStack.shift();
     this.redoStack = [];
     this.lastKind = kind;
     this.lastTime = now;
     this.current = this.snapshot(caret);
-    this.opts.onChange?.(this.getMarkdown());
+    this.emitChange(kind);
+    this.opts.onChange?.(this.lastMd);
     this.emitState();
     if (kind === "type") void this.updateSuggest();
     else this.closeSuggest();
@@ -680,7 +824,23 @@ export class Editor {
     this.reconcile();
     const c = s.caret && this.block(s.caret.bid) ? s.caret : this.endOf(this.blocks[0]);
     this.setCaret(c);
-    this.opts.onChange?.(this.getMarkdown());
+    this.emitChange("undo");
+    this.opts.onChange?.(this.lastMd);
+  }
+
+  /** Diff the document against the last one by common prefix/suffix and tell listeners. */
+  private emitChange(kind: string): void {
+    const prev = this.lastMd;
+    const next = this.getMarkdown();
+    this.lastMd = next;
+    if (prev === next) return;
+    let p = 0;
+    const max = Math.min(prev.length, next.length);
+    while (p < max && prev.charCodeAt(p) === next.charCodeAt(p)) p++;
+    let q = 0;
+    while (q < max - p && prev.charCodeAt(prev.length - 1 - q) === next.charCodeAt(next.length - 1 - q)) q++;
+    const ch: DocChange = { from: p, oldTo: prev.length - q, newTo: next.length - q, kind };
+    for (const h of this.changeHooks) h(ch);
   }
 
   private endOf(b: Block): Pos {
@@ -1004,7 +1164,12 @@ export class Editor {
     const el = s?.anchorNode ? blockElOf(s.anchorNode, this.root) : null;
     if (!el) {
       // browser broke the block structure (rare): rebuild from the DOM text
-      this.blocks = parse(Array.from(this.root.children).map((c) => sourceText(c as HTMLElement)).join("\n\n"));
+      this.blocks = parse(
+        Array.from(this.root.children)
+          .filter((c) => (c as HTMLElement).dataset.bid)
+          .map((c) => sourceText(c as HTMLElement))
+          .join("\n\n"),
+      );
       this.reconcile();
       return this.commit("edit", null);
     }
@@ -1022,6 +1187,7 @@ export class Editor {
   private onKeyDown(e: KeyboardEvent): void {
     if (this.menu.open && e.key === "Escape" && this.suggest) this.dismissed = `${this.suggest.bid}:${this.suggest.start}`;
     if (this.menu.key(e)) return;
+    for (const h of this.keyHooks) if (h(e)) return;
     const mod = e.metaKey || e.ctrlKey;
     const k = e.key.toLowerCase();
     if (mod && k === "z") return e.preventDefault(), e.shiftKey ? this.redo() : this.undo();
@@ -1042,6 +1208,10 @@ export class Editor {
   }
 
   private onMouseDown(e: MouseEvent): void {
+    if (this.pointerHooks.length) {
+      const off = this.offsetAtPoint(e.clientX, e.clientY);
+      for (const h of this.pointerHooks) if (h(e, off)) return;
+    }
     const target = e.target as HTMLElement;
     if (target.classList.contains("md-task-box")) {
       e.preventDefault();

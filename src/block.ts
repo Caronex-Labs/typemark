@@ -168,16 +168,19 @@ export function parse(md: string): Block[] {
 
 const tight = (t: BlockType) => t === "ul" || t === "ol" || t === "task" || t === "quote";
 
+/** Separator serialize() puts between two adjacent blocks. */
+export function separator(prev: string, next: string): string {
+  const a = blockType(prev);
+  const t = blockType(next);
+  const list = (x: BlockType) => x === "ul" || x === "ol" || x === "task";
+  return tight(a) && (a === t || (list(a) && list(t))) ? "\n" : "\n\n";
+}
+
 /** Blocks -> markdown. Adjacent list items / quote lines stay tight. */
 export function serialize(blocks: Block[]): string {
   let md = "";
   blocks.forEach((b, i) => {
-    if (i > 0) {
-      const a = blockType(blocks[i - 1].src);
-      const t = blockType(b.src);
-      const list = (x: BlockType) => x === "ul" || x === "ol" || x === "task";
-      md += tight(a) && (a === t || (list(a) && list(t))) ? "\n" : "\n\n";
-    }
+    if (i > 0) md += separator(blocks[i - 1].src, b.src);
     md += b.src;
   });
   return md;
