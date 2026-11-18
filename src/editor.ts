@@ -10,7 +10,8 @@
  * Structural edits (Enter, merging blocks, cross-block selections, paste,
  * undo) never go through the browser; they are model operations.
  */
-import { Block, blockType, continuation, indentOf, mkBlock, parse, prefixLen, renderBlock, serialize } from "./block";
+import { Block, blockType, continuation, fenceInfo, indentOf, mkBlock, parse, pipesOf, prefixLen, renderBlock, serialize } from "./block";
+import "./math";
 import { Pos, blockElOf, placeCaret, posOf } from "./caret";
 
 export interface EditorOptions {
@@ -100,6 +101,10 @@ export class Editor {
       `${r.attrs}${indent ? ` style="--indent:${indent}"` : ""}>${box}${r.html || "<br>"}</${r.tag}>`;
     const el = tpl.content.firstElementChild as BlockEl;
     el._html = tpl.innerHTML;
+    // empty code / math bodies get an empty text node so the caret has somewhere to live
+    for (const body of el.querySelectorAll(".md-code-block > code, .md-math-body")) {
+      if (!body.firstChild) body.append(document.createTextNode(""));
+    }
     return el;
   }
 
@@ -274,21 +279,25 @@ export class Editor {
   private enter(p: Pos): void {
     const b = this.block(p.bid)!;
     const t = blockType(b.src);
-    if (t === "code") {
-      const first = b.src.split("\n", 1)[0];
-      const fence = first.match(/^(`{3,}|~{3,})/)![1];
-      const closed = b.src.includes("\n") && new RegExp(`\\n${fence[0]}{${fence.length},}\\s*$`).test(b.src);
-      if (!closed && b.src === first) {
-        // "```js" + Enter: open a fenced block and close it for the user
-        b.src = `${first}\n\n${fence}`;
-        return this.after({ bid: b.id, off: first.length + 1 });
+    if (t === "code" || t === "math") {
+      const info = fenceInfo(b.src)!;
+      if (!info.closed && b.src === info.open) {
+        // "```js" or "$$" + Enter: open the block and close it for the user
+        b.src = `${info.open}\n\n${info.closer}`;
+        return this.after({ bid: b.id, off: info.open.length + 1 });
       }
-      const closeAt = closed ? b.src.lastIndexOf("\n") : b.src.length;
-      if (p.off > closeAt) {
-        // Enter on the closing fence line -> new paragraph after the block
-        return this.insertBlockAfter(b, "");
-      }
+      const closeAt = info.closed ? b.src.lastIndexOf("\n") : b.src.length;
+      if (p.off > closeAt) return this.insertBlockAfter(b, "");
       return this.replaceRange(p, p, "\n");
+    }
+    if (t === "table") return this.tableNewRow(b, p.off);
+    if (t === "paragraph" && p.off === b.src.length && /^\|(?:[^|\n]*\|){2,}\s*$/.test(b.src)) {
+      // "| a | b |" + Enter: turn the header line into a table
+      const n = pipesOf(b.src.trimEnd()).length - 1;
+      const head = b.src.trimEnd();
+      b.src = `${head}\n|${" --- |".repeat(n)}\n|${"   |".repeat(n)}`;
+      const rowStart = b.src.lastIndexOf("\n") + 1;
+      return this.after({ bid: b.id, off: rowStart + 2 });
     }
     const pre = prefixLen(b.src);
     if (pre > 0 && b.src.length === pre) {
@@ -309,6 +318,42 @@ export class Editor {
     const nb = mkBlock(cont + rest);
     this.blocks.splice(this.index(b.id) + 1, 0, nb);
     this.after({ bid: nb.id, off: cont.length });
+  }
+
+  private lineAt(src: string, off: number): { start: number; end: number; idx: number } {
+    const start = src.lastIndexOf("\n", off - 1) + 1;
+    const nl = src.indexOf("\n", off);
+    return { start, end: nl < 0 ? src.length : nl, idx: src.slice(0, start).split("\n").length - 1 };
+  }
+
+  /** Enter inside a table: add an empty row below the caret row. */
+  private tableNewRow(b: Block, off: number): void {
+    const header = b.src.split("\n", 1)[0];
+    const n = Math.max(1, pipesOf(header).length - 1);
+    const line = this.lineAt(b.src, off);
+    const at = line.idx === 0 ? this.lineAt(b.src, line.end + 1).end : line.end; // never between header and separator
+    const row = "|" + "   |".repeat(n);
+    b.src = b.src.slice(0, at) + "\n" + row + b.src.slice(at);
+    this.after({ bid: b.id, off: at + 3 });
+  }
+
+  /** Tab / Shift+Tab inside a table: jump to the next / previous cell. */
+  private tableTab(b: Block, off: number, back: boolean): void {
+    const starts: number[] = [];
+    let base = 0;
+    b.src.split("\n").forEach((line, i) => {
+      if (i !== 1) pipesOf(line).slice(0, -1).forEach((pp) => starts.push(base + pp + 1));
+      base += line.length + 1;
+    });
+    const cur = starts.filter((s) => s <= off).pop() ?? 0;
+    let target = back ? starts.filter((s) => s < cur).pop() : starts.find((s) => s > off);
+    if (target === undefined) {
+      if (back) return;
+      this.tableNewRow(b, b.src.length);
+      return;
+    }
+    if (b.src[target] === " ") target++;
+    this.setCaret({ bid: b.id, off: target });
   }
 
   private insertBlockAfter(b: Block, src: string): void {
@@ -416,6 +461,11 @@ export class Editor {
         this.blocks.splice(this.index(next.id), 1);
         return this.after({ bid: b.id, off: start.off });
       }
+      if (blockType(b.src) === "table") {
+        // never eat a hidden pipe or row break: that would silently merge cells/rows
+        const ch = backward ? b.src[start.off - 1] : b.src[start.off];
+        if (ch === "|" || ch === "\n") return prevent();
+      }
       if (t === "deleteContentBackward" || t === "deleteContentForward") {
         // single-char deletes go through the model so hidden syntax never gets in the way
         prevent();
@@ -468,6 +518,7 @@ export class Editor {
       const b = this.block(sel.start.bid)!;
       const t = blockType(b.src);
       e.preventDefault();
+      if (t === "table") return this.tableTab(b, sel.start.off, e.shiftKey);
       if (t === "ul" || t === "ol" || t === "task") this.indent(b, e.shiftKey ? -1 : 1);
       else if (!e.shiftKey) this.replaceRange(sel.start, sel.end, t === "code" ? "  " : "\t");
     }
@@ -482,6 +533,26 @@ export class Editor {
       b.src = b.src.replace(/\[([ xX])\]/, (_m, c) => (c === " " ? "[x]" : "[ ]"));
       this.reconcile();
       this.commit("edit", null);
+      return;
+    }
+    if (target.tagName === "TM-MATH") {
+      // click a rendered formula to edit its source
+      e.preventDefault();
+      const el = target.closest<HTMLElement>("[data-bid]")!;
+      const inl = target.closest<HTMLElement>(".md-math");
+      const off = inl ? Number(inl.dataset.s) + 1 : (this.block(el.dataset.bid!)!.src.indexOf("\n") + 1 || 2);
+      this.root.focus();
+      this.setCaret({ bid: el.dataset.bid!, off });
+      return;
+    }
+    const fn = target.closest<HTMLElement>(".md-fn-ref");
+    if (fn && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      const def = this.root.querySelector<HTMLElement>(`[data-type="footnote"][data-fn="${CSS.escape(fn.dataset.fn!)}"]`);
+      if (def) {
+        def.scrollIntoView({ block: "center", behavior: "smooth" });
+        this.setCaret({ bid: def.dataset.bid!, off: this.block(def.dataset.bid!)!.src.length });
+      }
       return;
     }
     const a = target.closest("a");

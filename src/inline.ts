@@ -41,6 +41,27 @@ const RULES: Rule[] = [
     render: (m, at) => wrap("code", "md-code", at, m[0].length, meta(m[1]) + esc(m[2]) + meta(m[1])),
   },
   {
+    // inline math: source is hidden md-meta, the KaTeX render sits in a shadow root (no text)
+    re: /\$(?![\s$])((?:\\.|[^$\\\n])+?)(?<!\s)\$(?!\d)/y,
+    render: (m, at) =>
+      wrap(
+        "span",
+        "md-math",
+        at,
+        m[0].length,
+        meta("$") +
+          `<span class="md-meta md-math-src">${esc(m[1])}</span>` +
+          meta("$") +
+          `<tm-math tex="${esc(m[1])}" contenteditable="false"></tm-math>`,
+      ),
+  },
+  {
+    // footnote reference [^id]
+    re: /\[\^([^\]\s]+)\](?!:)/y,
+    render: (m, at) =>
+      wrap("sup", "md-fn-ref", at, m[0].length, meta("[^") + esc(m[1]) + meta("]"), ` data-fn="${esc(m[1])}"`),
+  },
+  {
     re: /!\[([^\]]*)\]\(([^)\s]*)\)/y,
     render: (m, at) =>
       wrap(
@@ -86,7 +107,7 @@ const RULES: Rule[] = [
 ];
 
 /** Characters that may start an inline rule; everything else is plain text. */
-const TRIGGER = /[\\`!\[*_~=]/;
+const TRIGGER = /[\\`!\[*_~=$]/;
 
 export function renderInline(src: string, base = 0): string {
   let out = "";

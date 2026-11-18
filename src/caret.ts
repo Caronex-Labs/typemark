@@ -50,6 +50,7 @@ export function posOf(root: HTMLElement, node: Node | null, offset: number): Pos
 function isVisible(t: Text, blockEl: HTMLElement): boolean {
   const metaEl = t.parentElement?.closest(".md-meta");
   if (!metaEl || !blockEl.contains(metaEl)) return true;
+  if (metaEl.classList.contains("md-pipe")) return false;
   if (metaEl.classList.contains("md-block-meta")) return blockEl.classList.contains("md-focus");
   return !!metaEl.closest(".md-expand");
 }
@@ -77,7 +78,9 @@ export function domPoint(blockEl: HTMLElement, off: number): { node: Node; offse
     const len = t.data.length;
     if (off >= acc && off <= acc + len) {
       const p = { node: t, offset: off - acc };
-      if (isVisible(t, blockEl)) return p;
+      // a caret right after "\n" belongs to the NEXT line's node, not the end of this one
+      const afterNewline = off - acc === len && len > 0 && t.data.endsWith("\n");
+      if (isVisible(t, blockEl) && !afterNewline) return p;
       fallback ??= p;
     }
     acc += len;

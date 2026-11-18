@@ -98,3 +98,59 @@
 .tm-editor.tm-empty .md-block:first-child::before {
   content: attr(data-placeholder); color: var(--tm-meta); position: absolute; pointer-events: none;
 }
+
+/* ---- nested blockquotes: one border per level ---- */
+.tm-editor blockquote[data-depth] {
+  border-left: 0; padding-left: calc(var(--depth, 1) * 1em + .2em);
+  background-image: repeating-linear-gradient(to right, var(--tm-border) 0 4px, transparent 4px 1em);
+  background-size: calc(var(--depth, 1) * 1em) 100%; background-repeat: no-repeat;
+}
+.tm-editor .md-focus.md-quote > .md-block-meta { margin-left: 0; }
+.tm-editor .md-quote + .md-quote { margin-top: -0.8em; padding-top: 0; }
+
+/* ---- tables: pipes and the separator row are never shown ---- */
+.tm-editor .md-pipe { display: none !important; }
+.tm-editor .md-table { overflow-x: auto; }
+.tm-editor .md-table table { border-collapse: collapse; margin: 0; min-width: 40%; }
+.tm-editor .md-table th, .tm-editor .md-table td { border: 1px solid var(--tm-border); padding: 4px 10px; min-width: 3em; vertical-align: top; }
+.tm-editor .md-table th { font-weight: 600; background: var(--tm-code-bg); text-align: left; }
+.tm-editor .md-table tbody tr:nth-child(even) { background: color-mix(in srgb, var(--tm-code-bg) 45%, transparent); }
+.tm-editor .md-table tr.md-table-sep { display: none; }
+
+/* ---- math ---- */
+.tm-editor .md-math > tm-math { padding: 0 1px; }
+.tm-editor .md-math.md-expand > tm-math { opacity: .55; margin-left: .3em; }
+.tm-editor .md-math-src { color: var(--tm-fg) !important; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; }
+.tm-editor .md-math-block-src { display: none; font: .9em/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--tm-code-bg); border-radius: 6px; padding: 10px 14px; }
+.tm-editor .md-focus .md-math-block-src { display: block; }
+.tm-editor .md-math-block-src .md-math-body { color: var(--tm-fg); }
+.tm-editor .md-math tm-math[display], .tm-editor .md-math > tm-math[display] { padding: .4em 0; }
+.tm-editor .md-focus.md-math > tm-math { margin-top: .5em; opacity: .8; }
+
+/* ---- footnotes ---- */
+.tm-editor .md-fn-ref { color: var(--tm-accent); font-size: .75em; cursor: text; }
+.tm-editor .md-fn-ref:not(.md-expand)::before { content: "["; }
+.tm-editor .md-fn-ref:not(.md-expand)::after { content: "]"; }
+.tm-editor .md-footnote { font-size: .9em; color: var(--tm-quote); padding-left: 2.2em; margin-bottom: .3em; }
+.tm-editor .md-footnote:not(.md-focus)::before { content: attr(data-fn) "."; position: absolute; left: 0; width: 1.8em; text-align: right; color: var(--tm-accent); }
+.tm-editor .md-focus.md-footnote > .md-block-meta { margin-left: -2.2em; }
+.tm-editor .md-block:not(.md-footnote) + .md-footnote { border-top: 1px solid var(--tm-border); padding-top: .8em; margin-top: 1.4em; }
+
+/* ---- code highlighting (light / dark) ---- */
+.tm-editor .hljs-keyword, .tm-editor .hljs-selector-tag, .tm-editor .hljs-built_in { color: #a626a4; }
+.tm-editor .hljs-string, .tm-editor .hljs-attr-value, .tm-editor .hljs-regexp { color: #50a14f; }
+.tm-editor .hljs-number, .tm-editor .hljs-literal { color: #986801; }
+.tm-editor .hljs-comment, .tm-editor .hljs-quote { color: #a0a1a7; font-style: italic; }
+.tm-editor .hljs-title, .tm-editor .hljs-section, .tm-editor .hljs-function .hljs-title { color: #4078f2; }
+.tm-editor .hljs-attr, .tm-editor .hljs-attribute, .tm-editor .hljs-variable, .tm-editor .hljs-template-variable { color: #e45649; }
+.tm-editor .hljs-type, .tm-editor .hljs-class .hljs-title, .tm-editor .hljs-meta { color: #c18401; }
+@media (prefers-color-scheme: dark) {
+  .tm-editor .hljs-keyword, .tm-editor .hljs-selector-tag, .tm-editor .hljs-built_in { color: #c678dd; }
+  .tm-editor .hljs-string, .tm-editor .hljs-attr-value, .tm-editor .hljs-regexp { color: #98c379; }
+  .tm-editor .hljs-number, .tm-editor .hljs-literal { color: #d19a66; }
+  .tm-editor .hljs-comment, .tm-editor .hljs-quote { color: #7f848e; }
+  .tm-editor .hljs-title, .tm-editor .hljs-section { color: #61afef; }
+  .tm-editor .hljs-attr, .tm-editor .hljs-attribute, .tm-editor .hljs-variable { color: #e06c75; }
+  .tm-editor .hljs-type, .tm-editor .hljs-meta { color: #e5c07b; }
+}
+.tm-editor .md-focus .md-math-block-src > .md-meta { display: inline; }
