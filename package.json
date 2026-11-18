@@ -1,7 +1,7 @@
 {
   "name": "typemark",
   "version": "0.4.0",
-  "description": "Framework-free seamless live-preview markdown editing engine (Typora-style): syntax appears only where the caret is.",
+  "description": "Seamless Typora-style markdown editing engine with an AI review layer (suggested edits, agent notes, one thread per block, @ai instructions). Framework-free, markdown as the source of truth.",
   "type": "module",
   "main": "./dist/typemark.js",
   "types": "./dist/index.d.ts",
@@ -25,13 +25,18 @@
     "highlight.js": "^11.10.0",
     "katex": "^0.16.11"
   },
-  "private": true,
   "keywords": [
     "markdown",
     "editor",
     "wysiwyg",
+    "typora",
     "live-preview",
-    "contenteditable"
+    "contenteditable",
+    "ai",
+    "suggestions",
+    "track-changes",
+    "claude",
+    "mcp"
   ],
   "license": "MIT",
   "module": "./dist/typemark.js",
