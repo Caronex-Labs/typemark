@@ -91,3 +91,8 @@ it("code spans protect table pipes", () => {
   d.innerHTML = renderBlock("| a | `x | y` |\n|---|---|").html;
   expect(d.querySelectorAll("th").length).toBe(2);
 });
+
+it("mixed list kinds stay tight", () => {
+  const md = "- a\n- [ ] b\n1. c";
+  expect(serialize(parse(md))).toBe(md);
+});

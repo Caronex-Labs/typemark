@@ -10,11 +10,15 @@
  * Structural edits (Enter, merging blocks, cross-block selections, paste,
  * undo) never go through the browser; they are model operations.
  */
+import { readFrontmatter } from "./block";
 import { Block, BlockType, blockType, continuation, fenceInfo, indentOf, mkBlock, parse, pipesOf, prefixLen, renderBlock, serialize } from "./block";
 import "./math";
+import { SuggestItem, Suggester, matchBlockExt, registerExtension, registry } from "./extension";
+import { coreExtensions } from "./extensions";
+import { SuggestMenu } from "./suggest";
 import { FenceRenderer, registerFenceRenderer } from "./preview";
 import { EmbedPolicy, altFromName, buildEmbed, defaultEmbedPolicy, embedHtmlFor, fileToDataUrl, mdUrl } from "./media";
-import { Pos, blockElOf, placeCaret, posOf } from "./caret";
+import { Pos, blockElOf, placeCaret, posOf, sourceText } from "./caret";
 
 export interface EditorOptions {
   /** Initial markdown. */
@@ -38,6 +42,8 @@ export interface EditorOptions {
   resolveImageUrl?: (src: string) => string;
   /** Which iframe/video/audio sources may load. Default: https, not this page's origin. */
   embedPolicy?: EmbedPolicy;
+  /** Register the built-in syntax extensions (@[](url) embeds, [toc], callouts, / menu). Default true. */
+  coreExtensions?: boolean;
   /** Fence renderers by language, e.g. { mermaid: mermaidRenderer(() => import("mermaid")) }. Registered globally. */
   renderers?: Record<string, FenceRenderer>;
 }
@@ -54,6 +60,8 @@ export type Command =
   | { type: "imagePicker" } // open a file dialog, upload, insert
   | { type: "embed"; url: string } // YouTube/Vimeo/Loom/... URL, media file URL, or raw <iframe> HTML
   | { type: "diagram"; lang?: string } // fenced block for a registered renderer (default "mermaid")
+  | { type: "insertText"; text: string; caret?: number } // at the caret (replacing the selection); caret = offset into text
+  | { type: "insertBlock"; src: string; caret?: number } // new block after the caret block
   | { type: "undo" | "redo" };
 
 /** What is under the caret, for toolbars and status bars. */
@@ -82,7 +90,15 @@ interface Snapshot {
   caret: Pos | null;
 }
 
-type BlockEl = HTMLElement & { _html?: string };
+let coreRegistered = false;
+
+type BlockEl = HTMLElement & { _html?: string; _cleanup?: () => void };
+
+/** data-* of an inline extension element, minus engine bookkeeping. */
+function extData(el: HTMLElement): Record<string, string> {
+  const { s: _s, e: _e, ext: _x, ...rest } = el.dataset as Record<string, string>;
+  return rest;
+}
 
 export class Editor {
   readonly root: HTMLElement;
@@ -98,6 +114,10 @@ export class Editor {
   private readOnly = false;
   private abort = new AbortController();
   private lastState = "";
+  private menu: SuggestMenu;
+  private suggest: { bid: string; start: number; sg: Suggester; token: number } | null = null;
+  private suggestToken = 0;
+  private dismissed = "";
 
   constructor(root: HTMLElement, opts: EditorOptions = {}) {
     this.root = root;
@@ -105,6 +125,12 @@ export class Editor {
     root.classList.add("tm-editor");
     root.spellcheck = opts.spellcheck ?? true;
     if (opts.placeholder) root.dataset.placeholder = opts.placeholder;
+    if (opts.coreExtensions !== false && !coreRegistered) {
+      coreRegistered = true;
+      for (const x of coreExtensions) registerExtension(x);
+    }
+    this.menu = new SuggestMenu(root);
+    this.menu.onChoose = (item) => this.applySuggestion(item);
     this.setReadOnly(!!opts.readOnly);
     for (const [lang, r] of Object.entries(opts.renderers ?? {})) registerFenceRenderer(lang, r);
     this.setMarkdown(opts.value ?? "");
@@ -132,6 +158,8 @@ export class Editor {
   /** Remove every listener and leave the rendered (read-only) document in place. */
   destroy(): void {
     this.abort.abort();
+    this.menu.destroy();
+    for (const el of this.els.values()) el._cleanup?.();
     this.applyFocus(null);
     this.root.contentEditable = "false";
   }
@@ -159,6 +187,35 @@ export class Editor {
     this.root.contentEditable = readOnly ? "false" : "true";
     this.root.classList.toggle("tm-readonly", readOnly);
     if (readOnly) this.applyFocus(null);
+  }
+
+  /**
+   * Source mode: the SAME document, with every markdown character visible and
+   * previews hidden. Editing works identically; the caret stays where it was.
+   */
+  setSourceMode(on: boolean): void {
+    const sel = this.getSel();
+    this.root.classList.toggle("tm-source-mode", on);
+    if (sel) this.setCaret(sel.start, sel.collapsed ? undefined : sel.end);
+  }
+
+  isSourceMode(): boolean {
+    return this.root.classList.contains("tm-source-mode");
+  }
+
+  /** Focus mode: fade every block except the one being written. */
+  setFocusMode(on: boolean): void {
+    this.root.classList.toggle("tm-focus-mode", on);
+  }
+
+  /** Words and characters in the document (markdown syntax excluded where cheap). */
+  getStats(): { words: number; characters: number; readingMinutes: number } {
+    const text = this.blocks
+      .filter((b) => !["code", "math", "frontmatter", "html", "widget"].includes(blockType(b.src)))
+      .map((b) => b.src.slice(prefixLen(b.src)).replace(/!\[[^\]]*\]\([^)]*\)|\]\([^)]*\)|[#*_`~=\[\]>|]/g, " "))
+      .join(" ");
+    const words = (text.match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) ?? []).length;
+    return { words, characters: text.replace(/\s+/g, "").length, readingMinutes: Math.max(1, Math.round(words / 230)) };
   }
 
   isReadOnly(): boolean {
@@ -206,18 +263,16 @@ export class Editor {
         const at = sel.start;
         return this.replaceRange(at, "end" in sel && sel.end ? sel.end : at, md);
       }
-      case "imagePicker": {
-        const input = document.createElement("input");
-        input.type = "file";
-        input.accept = "image/*";
-        input.multiple = true;
-        const at = sel.start;
-        input.onchange = () => void this.insertImages(Array.from(input.files ?? []), at);
-        input.click();
+      case "imagePicker":
+        return this.pickImage({ bid: sel.start.bid, start: sel.start.off, end: sel.start.off });
+      case "insertText":
+        this.replaceRange(sel.start, "end" in sel && sel.end ? sel.end : sel.start, cmd.text);
+        if (cmd.caret !== undefined && !cmd.text.includes("\n")) this.setCaret({ bid: sel.start.bid, off: Math.min(sel.start.off, ("end" in sel && sel.end ? sel.end.off : sel.start.off)) + cmd.caret });
         return;
-      }
+      case "insertBlock":
+        return this.insertBlock(b, cmd.src, cmd.caret ?? "end");
       case "embed":
-        return this.insertBlock(b, embedHtmlFor(cmd.url), "end");
+        return this.insertBlock(b, `@[](${mdUrl(cmd.url)})`, "end");
       case "diagram": {
         const lang = cmd.lang ?? "mermaid";
         const starter = lang === "mermaid" ? "graph TD\n  A[Start] --> B[End]" : "";
@@ -234,6 +289,77 @@ export class Editor {
         return this.after({ bid: nb.id, off: cmd.type === "table" ? 2 : src.indexOf("\n") + 1 });
       }
     }
+  }
+
+  // ---------- document / block API (for hosts and extensions) ----------
+
+  /** The embed policy in effect (for widgets that build embeds). */
+  get embedPolicy(): EmbedPolicy {
+    return this.opts.embedPolicy ?? defaultEmbedPolicy;
+  }
+
+  /** Id of the block holding the caret, or null. */
+  caretBlockId(): string | null {
+    return this.getSel()?.start.bid ?? null;
+  }
+
+  /** All blocks in order, with their derived type. */
+  getBlocks(): { id: string; src: string; type: BlockType }[] {
+    return this.blocks.map((b) => ({ id: b.id, src: b.src, type: blockType(b.src) }));
+  }
+
+  /** Replace one block's markdown (undoable). The source may become several blocks. */
+  updateBlock(id: string, src: string): void {
+    const i = this.index(id);
+    if (i < 0) return;
+    const sel = this.getSel();
+    const parts = parse(src);
+    parts[0].id = id;
+    this.blocks.splice(i, 1, ...parts);
+    this.reconcile();
+    if (sel && this.block(sel.start.bid)) this.setCaret({ bid: sel.start.bid, off: Math.min(sel.start.off, this.block(sel.start.bid)!.src.length) });
+    this.commit("edit", sel?.start ?? null);
+  }
+
+  /** Document outline. */
+  getHeadings(): { id: string; level: number; text: string }[] {
+    return this.blocks
+      .filter((b) => blockType(b.src) === "heading")
+      .map((b) => ({ id: b.id, level: b.src.match(/^#+/)![0].length, text: b.src.replace(/^#+\s+/, "").replace(/[*_`~=]/g, "") }));
+  }
+
+  /** Scroll a block into view and put the caret at its end. */
+  revealBlock(id: string): void {
+    const el = this.els.get(id);
+    if (!el) return;
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    this.root.focus();
+    this.setCaret({ bid: id, off: this.block(id)!.src.length });
+  }
+
+  /** Front matter (`---` YAML at the top) as raw text and a shallow key/value read. */
+  getFrontmatter(): { raw: string; data: Record<string, string | string[]> } | null {
+    const b = this.blocks[0];
+    if (!b || blockType(b.src) !== "frontmatter") return null;
+    return { raw: b.src.split("\n").slice(1, -1).join("\n"), data: readFrontmatter(b.src) };
+  }
+
+  /** Set (or with null, remove) the front matter YAML body. */
+  setFrontmatter(yaml: string | null): void {
+    const has = this.blocks[0] && blockType(this.blocks[0].src) === "frontmatter";
+    if (yaml === null) {
+      if (has) this.blocks.splice(0, 1);
+    } else if (has) this.blocks[0].src = `---\n${yaml}\n---`;
+    else this.blocks.unshift(mkBlock(`---\n${yaml}\n---`));
+    if (!this.blocks.length) this.blocks.push(mkBlock(""));
+    this.reconcile();
+    this.commit("edit", null);
+  }
+
+  /** Re-render every block (call after registering extensions on a live editor). */
+  refresh(): void {
+    for (const el of this.els.values()) el._html = "";
+    this.reconcile();
   }
 
   /** What is under the caret right now. */
@@ -272,50 +398,104 @@ export class Editor {
 
   // ---------- rendering ----------
 
-  private buildEl(b: Block): BlockEl {
+  private blockHtml(b: Block): string {
     const r = renderBlock(b.src);
-    const tpl = document.createElement("template");
     const indent = r.type === "ul" || r.type === "ol" || r.type === "task" ? indentOf(b.src) : 0;
-    const box = r.type === "task" ? `<span class="md-task-box" contenteditable="false"></span>` : "";
+    const box = r.type === "task" ? `<span class="md-task-box" contenteditable="false" data-tm-ui></span>` : "";
     const empty = b.src === "" ? " md-empty" : "";
-    tpl.innerHTML =
+    return (
       `<${r.tag} class="md-block md-${r.type}${empty}" data-bid="${b.id}" data-type="${r.type}"` +
-      `${r.attrs}${indent ? ` style="--indent:${indent}"` : ""}>${box}${r.html || "<br>"}</${r.tag}>`;
+      `${r.attrs}${indent ? ` style="--indent:${indent}"` : ""}>${box}${r.html || "<br>"}</${r.tag}>`
+    );
+  }
+
+  private buildEl(b: Block, html: string): BlockEl {
+    const tpl = document.createElement("template");
+    tpl.innerHTML = html;
     const el = tpl.content.firstElementChild as BlockEl;
-    el._html = tpl.innerHTML;
+    el._html = html;
     // empty code / math bodies get an empty text node so the caret has somewhere to live
     for (const body of el.querySelectorAll(".md-code-block > code, .md-math-body")) {
       if (!body.firstChild) body.append(document.createTextNode(""));
     }
-    // decorations that add no text: resolved image URLs, sanitised embeds
+    return el;
+  }
+
+  /** Attach everything that adds no source text: images, embeds, widgets, inline decorations. */
+  private hydrate(el: BlockEl, b: Block): void {
     if (this.opts.resolveImageUrl) {
       for (const img of el.querySelectorAll<HTMLImageElement>("img[data-src]")) img.src = this.opts.resolveImageUrl(img.dataset.src!);
     }
     for (const mount of el.querySelectorAll<HTMLElement>(".md-embed[data-embed]")) {
       mount.append(buildEmbed(mount.dataset.embed!, this.opts.embedPolicy ?? defaultEmbedPolicy));
     }
-    return el;
+    for (const x of el.querySelectorAll<HTMLElement>(".md-x[data-ext]")) {
+      const ext = registry.inline.find((i) => i.name === x.dataset.ext);
+      try {
+        ext?.decorate?.(x, extData(x), this);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    this.mountWidget(el, b);
+  }
+
+  private mountWidget(el: BlockEl, b: Block): void {
+    const mount = el.querySelector<HTMLElement>(":scope > .md-widget");
+    if (!mount) return;
+    const x = matchBlockExt(b.src);
+    if (!x || x.ext.kind !== "widget") return;
+    el._cleanup?.();
+    mount.replaceChildren();
+    const fence = fenceInfo(b.src);
+    const lines = b.src.split("\n");
+    const body = fence ? lines.slice(1, fence.closed ? -1 : undefined).join("\n") : b.src;
+    try {
+      const done = x.ext.render({
+        el: mount,
+        src: b.src,
+        body,
+        match: x.match,
+        setSource: (next) => this.updateBlock(b.id, next),
+        editor: this,
+        blockId: b.id,
+        readOnly: this.readOnly,
+      });
+      el._cleanup = typeof done === "function" ? done : undefined;
+    } catch (err) {
+      mount.textContent = `Widget "${x.ext.name}" failed: ${(err as Error).message}`;
+    }
   }
 
   /** Make the DOM match the model, replacing only blocks whose HTML changed. */
   private reconcile(): void {
     const keep = new Set(this.blocks.map((b) => b.id));
+    let changed = false;
     for (const [id, el] of this.els) {
       if (!keep.has(id)) {
+        el._cleanup?.();
         el.remove();
         this.els.delete(id);
+        changed = true;
       }
     }
     let prev: Element | null = null;
+    const fresh: [BlockEl, Block][] = [];
     for (const b of this.blocks) {
-      const fresh = this.buildEl(b);
+      const html = this.blockHtml(b);
       let el = this.els.get(b.id);
-      if (!el || el._html !== fresh._html || !el.isConnected) {
+      if (!el || el._html !== html || !el.isConnected) {
         const focused = el?.classList.contains("md-focus");
-        if (el?.isConnected) el.replaceWith(fresh);
-        el = fresh;
+        const next = this.buildEl(b, html);
+        if (el?.isConnected) {
+          el._cleanup?.();
+          el.replaceWith(next);
+        }
+        el = next;
         if (focused) el.classList.add("md-focus");
         this.els.set(b.id, el);
+        fresh.push([el, b]);
+        changed = true;
       }
       const want: Element | null = prev ? prev.nextElementSibling : this.root.firstElementChild;
       if (want !== el) {
@@ -328,6 +508,15 @@ export class Editor {
     while (prev && prev.nextSibling) prev.nextSibling.remove();
     for (const n of Array.from(this.root.childNodes)) {
       if (!(n as HTMLElement).dataset?.bid) n.remove();
+    }
+    for (const [el, b] of fresh) this.hydrate(el, b); // after insertion: widgets may measure / read the document
+    if (changed) {
+      // live widgets (table of contents, queries...) re-render on any document change
+      for (const b of this.blocks) {
+        const x = matchBlockExt(b.src);
+        const el = this.els.get(b.id)!;
+        if (x?.ext.kind === "widget" && x.ext.live && !fresh.some(([f]) => f === el)) this.mountWidget(el, b);
+      }
     }
     this.root.classList.toggle("tm-empty", this.blocks.length === 1 && this.blocks[0].src === "");
   }
@@ -380,6 +569,10 @@ export class Editor {
 
   private syncFocus(): void {
     if (this.composing || this.readOnly) return;
+    if (this.suggest) {
+      const sel = this.getSel();
+      if (!sel || sel.start.bid !== this.suggest.bid || sel.start.off <= this.suggest.start) this.closeSuggest();
+    }
     queueMicrotask(() => this.emitState());
     const sel = this.getSel();
     if (!sel) return this.applyFocus(null);
@@ -412,6 +605,61 @@ export class Editor {
     this.current = this.snapshot(caret);
     this.opts.onChange?.(this.getMarkdown());
     this.emitState();
+    if (kind === "type") void this.updateSuggest();
+    else this.closeSuggest();
+  }
+
+  // ---------- suggestions ----------
+
+  private closeSuggest(): void {
+    this.suggest = null;
+    this.menu.hide();
+  }
+
+  private async updateSuggest(): Promise<void> {
+    const sel = this.getSel();
+    if (!sel || !sel.collapsed || !registry.suggesters.length) return this.closeSuggest();
+    const b = this.block(sel.start.bid)!;
+    if (["code", "math", "frontmatter", "html", "widget"].includes(blockType(b.src))) return this.closeSuggest();
+    const before = b.src.slice(0, sel.start.off);
+    let best: { sg: Suggester; idx: number; q: string } | null = null;
+    for (const sg of registry.suggesters) {
+      const idx = before.lastIndexOf(sg.trigger);
+      if (idx < 0 || (best && idx < best.idx)) continue;
+      const boundary = sg.boundary ?? sg.trigger.length === 1;
+      if (boundary && idx > 0 && !/\s/.test(before[idx - 1]) && idx !== prefixLen(b.src)) continue;
+      const q = before.slice(idx + sg.trigger.length);
+      if (q.length > 40 || q.includes("\n") || (sg.trigger.length === 1 && /\s/.test(q))) continue;
+      if (this.dismissed === `${b.id}:${idx}`) continue;
+      best = { sg, idx, q };
+    }
+    if (!best) return this.closeSuggest();
+    const token = ++this.suggestToken;
+    this.suggest = { bid: b.id, start: best.idx, sg: best.sg, token };
+    let items: SuggestItem[];
+    try {
+      items = await best.sg.items(best.q, { editor: this });
+    } catch {
+      items = [];
+    }
+    if (token !== this.suggestToken || !this.suggest) return;
+    const r = window.getSelection()?.rangeCount ? window.getSelection()!.getRangeAt(0) : null;
+    let rect = r?.getClientRects()[0] ?? r?.getBoundingClientRect();
+    if (!rect || (!rect.width && !rect.height && !rect.top)) rect = this.els.get(b.id)!.getBoundingClientRect();
+    this.menu.show(items, rect);
+  }
+
+  private applySuggestion(item: SuggestItem): void {
+    const ctx = this.suggest;
+    const sel = this.getSel();
+    this.closeSuggest();
+    if (!ctx || !sel) return;
+    const start = { bid: ctx.bid, off: ctx.start };
+    if (typeof item.apply === "string") this.replaceRange(start, sel.start, item.apply);
+    else {
+      this.replaceRange(start, sel.start, "");
+      item.apply({ editor: this });
+    }
   }
 
   undo(): void {
@@ -467,7 +715,29 @@ export class Editor {
     this.commit(kind, caret);
   }
 
+  /** The `![alt]()` with an EMPTY url that contains the caret, if any. */
+  private emptyImageAt(p: Pos): { start: number; end: number; alt: string } | null {
+    const b = this.block(p.bid)!;
+    const re = /!\[([^\]]*)\]\(\s*\)/g;
+    for (let m = re.exec(b.src); m; m = re.exec(b.src)) {
+      if (m.index < p.off && p.off <= m.index + m[0].length) return { start: m.index, end: m.index + m[0].length, alt: m[1] };
+    }
+    return null;
+  }
+
+  /** Open a file dialog and replace [start, end) of block `bid` with the uploaded image(s). */
+  pickImage(at?: { bid: string; start: number; end: number; alt?: string }): void {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.multiple = true;
+    input.onchange = () => void this.insertImages(Array.from(input.files ?? []), at ? { bid: at.bid, off: at.start } : undefined, at);
+    input.click();
+  }
+
   private enter(p: Pos): void {
+    const img = this.emptyImageAt(p);
+    if (img) return this.pickImage({ bid: p.bid, ...img });
     const b = this.block(p.bid)!;
     const t = blockType(b.src);
     if (t === "code" || t === "math") {
@@ -557,17 +827,21 @@ export class Editor {
   }
 
   /** Upload image files and insert them as markdown images at `at`. */
-  async insertImages(files: File[], at?: Pos): Promise<void> {
+  async insertImages(files: File[], at?: Pos, replace?: { bid: string; start: number; end: number; alt?: string }): Promise<void> {
     const imgs = files.filter((f) => f.type.startsWith("image/"));
     if (!imgs.length) return;
     const upload = this.opts.uploadImage ?? fileToDataUrl;
     const urls = await Promise.all(imgs.map((f) => upload(f).catch(() => null)));
     const md = imgs
-      .map((f, i) => (urls[i] ? `![${altFromName(f.name)}](${mdUrl(urls[i]!)})` : ""))
+      .map((f, i) => (urls[i] ? `![${(i === 0 && replace?.alt) || altFromName(f.name)}](${mdUrl(urls[i]!)})` : ""))
       .filter(Boolean)
       .join("\n\n");
     if (!md || this.readOnly) return;
     // the document may have changed while uploading: fall back to the end
+    const rb = replace && this.block(replace.bid);
+    if (rb && /^!\[[^\]]*\]\(\s*\)$/.test(rb.src.slice(replace!.start, replace!.end))) {
+      return this.replaceRange({ bid: replace!.bid, off: replace!.start }, { bid: replace!.bid, off: replace!.end }, md);
+    }
     const pos = at && this.block(at.bid) && at.off <= this.block(at.bid)!.src.length ? at : this.endOf(this.blocks[this.blocks.length - 1]);
     this.replaceRange(pos, pos, md);
   }
@@ -576,7 +850,9 @@ export class Editor {
     const files = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type.startsWith("image/"));
     if (!files.length) return;
     e.preventDefault();
-    void this.insertImages(files, this.getSel()?.start);
+    const at = this.getSel()?.start;
+    const img = at && this.emptyImageAt(at);
+    void this.insertImages(files, at, img ? { bid: at!.bid, ...img } : undefined);
   }
 
   private onDropFiles(e: DragEvent): void {
@@ -728,14 +1004,14 @@ export class Editor {
     const el = s?.anchorNode ? blockElOf(s.anchorNode, this.root) : null;
     if (!el) {
       // browser broke the block structure (rare): rebuild from the DOM text
-      this.blocks = parse(Array.from(this.root.children).map((c) => c.textContent ?? "").join("\n\n"));
+      this.blocks = parse(Array.from(this.root.children).map((c) => sourceText(c as HTMLElement)).join("\n\n"));
       this.reconcile();
       return this.commit("edit", null);
     }
     const b = this.block(el.dataset.bid!);
     if (!b) return;
     const caret = posOf(this.root, s!.anchorNode, s!.anchorOffset)!;
-    const text = el.textContent ?? "";
+    const text = sourceText(el);
     if (text === b.src) return;
     b.src = text;
     this.reconcile();
@@ -744,6 +1020,8 @@ export class Editor {
   }
 
   private onKeyDown(e: KeyboardEvent): void {
+    if (this.menu.open && e.key === "Escape" && this.suggest) this.dismissed = `${this.suggest.bid}:${this.suggest.start}`;
+    if (this.menu.key(e)) return;
     const mod = e.metaKey || e.ctrlKey;
     const k = e.key.toLowerCase();
     if (mod && k === "z") return e.preventDefault(), e.shiftKey ? this.redo() : this.undo();
@@ -774,6 +1052,15 @@ export class Editor {
       this.commit("edit", null);
       return;
     }
+    const xel = target.closest<HTMLElement>(".md-x[data-ext]");
+    if (xel) {
+      const ext = registry.inline.find((i) => i.name === xel.dataset.ext);
+      if (ext?.onClick && (!ext.modClick || e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        ext.onClick(extData(xel), { editor: this, event: e, element: xel });
+        return;
+      }
+    }
     if (target.tagName === "IMG" && target.closest(".md-image")) {
       // click an image to edit its markdown (caret into the alt text)
       e.preventDefault();
@@ -783,7 +1070,11 @@ export class Editor {
       this.setCaret({ bid: el.dataset.bid!, off: Number(inl.dataset.s) + 2 });
       return;
     }
-    if (target.tagName === "TM-PREVIEW" || target.classList.contains("md-embed") || target.classList.contains("md-embed-note")) {
+    if (
+      target.tagName === "TM-PREVIEW" ||
+      target.matches(".md-embed, .md-embed-note, .md-props, .md-props *") ||
+      (target.matches(".md-widget") && !this.readOnly)
+    ) {
       e.preventDefault();
       const el = target.closest<HTMLElement>("[data-bid]")!;
       const src = this.block(el.dataset.bid!)!.src;

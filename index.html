@@ -3,114 +3,95 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>typemark-lite</title>
+    <title>typemark</title>
     <style>
-      html, body { margin: 0; background: #fff; }
-      @media (prefers-color-scheme: dark) { html, body { background: #1e1f22; } }
-      #bar { position: fixed; top: 8px; right: 12px; font: 12px system-ui; z-index: 2; }
-      #bar button { font: inherit; }
-      #src { position: fixed; inset: 40px 12px 12px auto; width: 38vw; display: none; font: 12px ui-monospace, monospace;
-             white-space: pre-wrap; overflow: auto; background: #f6f6f6; padding: 10px; border-radius: 6px; color: #333; }
-      body.show-src #src { display: block; }
-      body.show-src #editor { margin-right: 40vw; }
+      :root {
+        --bg: #fff; --bar: rgba(255,255,255,.78); --fg: #1f2328; --muted: #8b929b; --line: #e7e9ec;
+        --pill: #f2f3f5; --pill-on: #1f2328; --pill-on-fg: #fff; --accent: #4183c4; --panel: #f7f8fa;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          --bg: #1e1f22; --bar: rgba(30,31,34,.78); --fg: #e6e6e6; --muted: #858a93; --line: #2f3136;
+          --pill: #2b2d31; --pill-on: #e6e6e6; --pill-on-fg: #1e1f22; --accent: #6cb6ff; --panel: #191a1d;
+        }
+      }
+      :root[data-theme="dark"] {
+        --bg: #1e1f22; --bar: rgba(30,31,34,.78); --fg: #e6e6e6; --muted: #858a93; --line: #2f3136;
+        --pill: #2b2d31; --pill-on: #e6e6e6; --pill-on-fg: #1e1f22; --accent: #6cb6ff; --panel: #191a1d;
+      }
+      html, body { margin: 0; background: var(--bg); color: var(--fg); }
+      body { font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+
+      .bar {
+        position: sticky; top: 0; z-index: 10; height: 52px; display: flex; align-items: center; gap: 14px;
+        padding: 0 16px; background: var(--bar); backdrop-filter: saturate(1.6) blur(14px); -webkit-backdrop-filter: saturate(1.6) blur(14px);
+        border-bottom: 1px solid var(--line);
+      }
+      .mark {
+        width: 26px; height: 26px; border-radius: 7px; flex: none; display: grid; place-items: center;
+        background: linear-gradient(135deg, #6c8cff, #b46cff); color: #fff; font: 700 14px/1 Georgia, serif; box-shadow: 0 2px 8px rgba(108,140,255,.35);
+      }
+      .doc { min-width: 0; display: flex; align-items: baseline; gap: 10px; }
+      #title { font-weight: 600; font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 38vw; }
+      #saved { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+      #saved::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #2da44e; transition: background .2s; }
+      #saved[data-state="saving"]::before { background: #d4a72c; }
+      #saved[data-state="saving"]::after { content: "Saving…"; }
+      #saved:not([data-state="saving"])::after { content: "Saved"; }
+      .spacer { flex: 1; }
+      #stats { color: var(--muted); font-size: 12.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+      .seg { display: inline-flex; background: var(--pill); border-radius: 9px; padding: 3px; gap: 2px; }
+      .seg button, .icon-btn {
+        font: 500 12.5px/1 inherit; color: var(--fg); background: transparent; border: 0; border-radius: 7px;
+        padding: 7px 11px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: background .15s, color .15s;
+      }
+      .seg button:hover, .icon-btn:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
+      .seg button[aria-pressed="true"] { background: var(--pill-on); color: var(--pill-on-fg); }
+      .icon-btn { background: var(--pill); padding: 7px 9px; }
+      .icon-btn svg, .seg svg { width: 15px; height: 15px; }
+      #t-theme .sun, #t-theme .moon, #t-theme .auto { display: none; }
+      #t-theme[data-theme="light"] .sun, #t-theme[data-theme="dark"] .moon, #t-theme[data-theme="auto"] .auto { display: block; }
+
+      main { display: flex; }
+      #editor { flex: 1; min-width: 0; }
+
+      .toast {
+        position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 20;
+        background: var(--pill-on); color: var(--pill-on-fg); padding: 9px 16px; border-radius: 10px;
+        font-size: 13px; box-shadow: 0 8px 24px rgba(0,0,0,.2); animation: up .2s ease-out; transition: opacity .3s;
+      }
+      .toast.out { opacity: 0; }
+      @keyframes up { from { opacity: 0; transform: translate(-50%, 8px); } }
+      @media (max-width: 720px) { #stats, #saved { display: none; } .seg button span { display: none; } }
     </style>
   </head>
   <body>
-    <div id="bar">
-      <button data-cmd="bold"><b>B</b></button><button data-cmd="italic"><i>I</i></button>
-      <button data-cmd="h2">H2</button><button data-cmd="imagePicker">Upload image</button>
-      <button data-cmd="imageUrl">Image URL</button><button data-cmd="embed">Embed</button>
-      <button data-cmd="diagram">Diagram</button><button id="toggle">Show markdown</button>
-    </div>
-    <div id="editor"></div>
-    <pre id="src"></pre>
-    <script type="module">
-      import "./src/style.css";
-      import { createEditor, mermaidRenderer } from "./src/index.ts";
-
-      const sample = `# Welcome to typemark-lite
-
-Type markdown and it renders *as you type*. Move the caret into **bold text**, a \`code span\`, or a [link](https://example.com) and its syntax appears; move away and it hides.
-
-## Try these
-
-- Start a line with \`# \` to make a heading
-- \`- \` or \`1. \` starts a list, Enter continues it, Enter on an empty item ends it
-- [ ] \`- [ ] \` makes a task, click the box to tick it
-- [x] Tab / Shift+Tab indents list items
-
-> Quotes start with \`> \`
-
-\`\`\`js
-// type \`\`\`lang then Enter for a code block
-const answer = 42;
-\`\`\`
-
-## Tables, math, footnotes
-
-| Feature | Syntax | Status |
-|:--|:--:|--:|
-| Table | \`| a | b |\` + Enter | ✓ |
-| Math | \`$x^2$\`, \`$$\` + Enter | ✓ |
-
-Euler's identity $e^{i\\pi} + 1 = 0$ renders inline; click it to edit.
-
-$$
-\\int_0^\\infty e^{-x^2}\\,dx = \\frac{\\sqrt{\\pi}}{2}
-$$
-
-> Quotes nest
-> > like this, with \`> > \`
-
-Footnotes work too.[^1] Cmd+click the marker to jump.
-
-## Images, embeds, diagrams
-
-Paste or drop an image anywhere, or use the toolbar. Click an image to edit its markdown.
-
-![Mountains](https://picsum.photos/id/1018/720/320 "Picsum")
-
-\`\`\`mermaid
-graph LR
-  A[Type markdown] --> B{Caret nearby?}
-  B -- yes --> C[Show syntax]
-  B -- no --> D[Show rendered]
-\`\`\`
-
-<iframe src="https://www.youtube.com/embed/aqz-KE-bpKQ" width="100%" height="360" allow="fullscreen" allowfullscreen></iframe>
-
----
-
-Also: ~~strike~~, ==highlight==, Cmd+B / Cmd+I / Cmd+E, Cmd+Z undo, and copy gives you markdown.
-
-[^1]: Footnote definitions live at the bottom.`;
-
-      const srcEl = document.getElementById("src");
-      const ed = createEditor(document.getElementById("editor"), {
-        value: localStorage.getItem("tm-doc") ?? sample,
-        placeholder: "Start writing…",
-        renderers: { mermaid: mermaidRenderer(() => import("mermaid")) },
-        onChange: (md) => {
-          srcEl.textContent = md;
-          try { localStorage.setItem("tm-doc", md); } catch {}
-        },
-      });
-      srcEl.textContent = ed.getMarkdown();
-      window.editor = ed;
-      const cmds = {
-        bold: () => ({ type: "bold" }),
-        italic: () => ({ type: "italic" }),
-        h2: () => ({ type: "heading", level: 2 }),
-        imagePicker: () => ({ type: "imagePicker" }),
-        imageUrl: () => { const src = prompt("Image URL"); return src && { type: "image", src, alt: "image" }; },
-        embed: () => { const url = prompt("YouTube / Vimeo / Loom / video URL"); return url && { type: "embed", url }; },
-        diagram: () => ({ type: "diagram" }),
-      };
-      for (const b of document.querySelectorAll("[data-cmd]")) {
-        b.onmousedown = (e) => e.preventDefault(); // keep the caret in the editor
-        b.onclick = () => { const c = cmds[b.dataset.cmd](); if (c) ed.exec(c); };
-      }
-      document.getElementById("toggle").onclick = () => document.body.classList.toggle("show-src");
-    </script>
+    <header class="bar">
+      <div class="mark">T</div>
+      <div class="doc"><span id="title">Untitled</span><span id="saved" data-state="saved"></span></div>
+      <div class="spacer"></div>
+      <span id="stats"></span>
+      <div class="seg" role="group" aria-label="View">
+        <button id="t-source" aria-pressed="false" title="Show the markdown, in place">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5"/></svg><span>Source</span>
+        </button>
+        <button id="t-focus" aria-pressed="false" title="Focus mode: fade everything but the current block">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="8" cy="8" r="2.2"/><path d="M2 5.5V3a1 1 0 0 1 1-1h2.5M10.5 2H13a1 1 0 0 1 1 1v2.5M14 10.5V13a1 1 0 0 1-1 1h-2.5M5.5 14H3a1 1 0 0 1-1-1v-2.5"/></svg><span>Focus</span>
+        </button>
+      </div>
+      <button class="icon-btn" id="t-theme" title="Theme">
+        <svg class="sun" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="8" cy="8" r="3"/><path d="M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M3 3l1 1M12 12l1 1M3 13l1-1M12 4l1-1"/></svg>
+        <svg class="moon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M13.5 9.5A5.5 5.5 0 0 1 6.5 2.5a5.5 5.5 0 1 0 7 7Z"/></svg>
+        <svg class="auto" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6"/><path d="M8 2a6 6 0 0 1 0 12Z" fill="currentColor"/></svg>
+      </button>
+      <button class="icon-btn" id="t-reset" title="Restore the sample document">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8a5.5 5.5 0 1 0 1.7-4M2.5 2.5V5H5"/></svg>
+      </button>
+    </header>
+    <main>
+      <div id="editor"></div>
+    </main>
+    <script type="module" src="/demo/main.ts"></script>
   </body>
 </html>

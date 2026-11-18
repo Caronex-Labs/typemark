@@ -7,6 +7,11 @@ and markdown syntax appears only around the caret. The source of truth is always
 - Works in any framework (React, Svelte, Vue, plain DOM) — it just takes an element
 - Headings, emphasis, links, images, lists, task lists, quotes (nested), code blocks with highlighting,
   tables, inline and block math (KaTeX), footnotes, horizontal rules, strike, highlight
+- Images (URL, upload, paste, drop), embeds, Mermaid diagrams, callouts, table of contents, front matter
+  properties: **all through markdown syntax**, no buttons needed
+- **Source mode** shows the same page with every markdown character visible, still editable
+- An **extension API** for your own blocks, inline syntax, widgets, buttons and autocomplete: the engine owns
+  editing, your app owns behaviour
 
 ## Install
 
@@ -67,6 +72,11 @@ function MarkdownEditor({ value, onChange }: { value: string; onChange(md: strin
 | `placeholder`   | `string`                       |         | shown while empty                                      |
 | `readOnly`      | `boolean`                      | `false` | render only                                            |
 | `spellcheck`    | `boolean`                      | `true`  |                                                        |
+| `uploadImage`   | `(file) => Promise<url>`       | data URL | store pasted / dropped / picked images                |
+| `resolveImageUrl` | `(src) => url`               |         | map markdown srcs (e.g. relative paths) to loadable URLs |
+| `embedPolicy`   | `(url: URL) => boolean`        | https, cross-origin | which embeds may load                      |
+| `renderers`     | `Record<lang, FenceRenderer>`  |         | e.g. `{ mermaid: mermaidRenderer(() => import("mermaid")) }` |
+| `coreExtensions`| `boolean`                      | `true`  | register embeds, `[toc]`, callouts, `/` menu           |
 
 ### `Editor`
 
@@ -78,6 +88,14 @@ function MarkdownEditor({ value, onChange }: { value: string; onChange(md: strin
 | `getState()`              | `EditorState` at the caret                                  |
 | `setReadOnly(b)` / `isReadOnly()` |                                                     |
 | `focus()`                 | caret to end of document                                    |
+| `setSourceMode(b)` / `isSourceMode()` | show every markdown character in place (still editable) |
+| `setFocusMode(b)`         | fade all blocks but the current one                         |
+| `getStats()`              | `{ words, characters, readingMinutes }`                     |
+| `getBlocks()` / `updateBlock(id, src)` | read / replace blocks (undoable)               |
+| `getHeadings()` / `revealBlock(id)` | outline and navigation                            |
+| `getFrontmatter()` / `setFrontmatter(yaml \| null)` | document properties                  |
+| `insertImages(files, at?)` / `pickImage()` | upload through `uploadImage`               |
+| `refresh()`               | re-render after registering extensions on a live editor     |
 | `undo()` / `redo()`       |                                                             |
 | `destroy()`               | remove all listeners; rendered content stays                |
 | `root`                    | the element                                                 |
@@ -90,8 +108,15 @@ type Command =
   | { type: "heading"; level: 0 | 1 | 2 | 3 | 4 | 5 | 6 }        // 0 = paragraph
   | { type: "bulletList" | "orderedList" | "taskList" | "quote" } // same command again toggles off
   | { type: "codeBlock" | "mathBlock" | "table" | "hr" }          // insert
+  | { type: "image"; src: string; alt?: string } | { type: "imagePicker" }
+  | { type: "embed"; url: string }                                // inserts @[](url)
+  | { type: "diagram"; lang?: string }                            // fenced block for a renderer
+  | { type: "insertText"; text: string; caret?: number }
+  | { type: "insertBlock"; src: string; caret?: number }
   | { type: "undo" | "redo" };
 ```
+
+Commands exist for apps that need them (menus, shortcuts, AI insertions); writers never need a toolbar.
 
 ### `EditorState`
 
@@ -104,6 +129,28 @@ type Command =
 `parse(md) → Block[]`, `serialize(blocks) → md`, `renderBlock(src)`, `renderInline(src)`, `blockType(src)` —
 useful for rendering markdown read-only with exactly the editor's look (wrap output in an element with class
 `tm-editor`).
+
+## Syntax
+
+Everything is typed. Syntax this engine invented is marked ★.
+
+| You type | You get |
+|---|---|
+| `# `, `## ` … | headings |
+| `- `, `1. `, `- [ ] ` | lists and tasks (Enter continues, Tab indents) |
+| `> `, `> > ` | quotes, nested |
+| `> [!note] ` / `tip` `info` `success` `warning` `danger` `bug` `example` `quote` `todo` | callouts (Obsidian syntax) |
+| `**b**` `*i*` `` `c` `` `~~s~~` `==h==` `[t](url)` | inline formatting |
+| `![alt](url)` | image; ★ press **Enter** inside an empty `![]()` to pick a file; paste/drop an image to upload |
+| ★ `@[title](url)` | embed: YouTube, Vimeo, Loom, CodePen, Figma, audio/video files, any https page (sandboxed) |
+| `<iframe …>`, `<video …>` | raw embeds (attribute-whitelisted) |
+| ```` ```lang ```` + Enter | code block (highlighted); ```` ```mermaid ```` renders a diagram |
+| `$x$`, `$$` + Enter | math (KaTeX) |
+| `\| a \| b \|` + Enter | table (Tab moves between cells) |
+| ★ `[toc]` | live table of contents |
+| `[^1]` / `[^1]: text` | footnotes |
+| `---` at the top … `---` | front matter, shown as a properties panel |
+| `/` at line start | menu that **types the syntax for you** |
 
 ## Keyboard
 
@@ -119,6 +166,55 @@ useful for rendering markdown read-only with exactly the editor's look (wrap out
 | Cmd/Ctrl + click           | follow link · jump to footnote                        |
 
 Copy produces markdown, paste takes plain text (multi-line paste becomes blocks).
+
+## Extensions
+
+Extensions declare **syntax** and **hooks**; markdown stays the only source of truth. Register them for the page with
+`registerExtension(ext)` (returns an unregister function).
+
+```ts
+import { registerExtension, wikilinks, tags, mentions, actionButtons } from "typemark-lite";
+
+registerExtension(wikilinks({ onOpen: (t) => router.open(t), exists: (t) => db.has(t), suggest: (q) => db.search(q) }));
+registerExtension(tags({ onOpen: (t) => search("#" + t) }));
+registerExtension(mentions({ onOpen: (u) => profile(u), suggest: (q) => users(q) }));
+registerExtension(actionButtons({ onAction: ({ action, args }, { editor }) => run(action, args) }));
+```
+
+```button
+label: Deploy preview
+action: deploy
+env: staging
+```
+
+Four extension points:
+
+| Kind | Use for | You provide |
+|---|---|---|
+| **inline** | `[[links]]`, `#tags`, `@mentions`, dates, emoji | `trigger`, `pattern`, `parts` (which slices are syntax), `data`, `onClick`, `decorate` |
+| **prefix block** | callouts, toggles, custom headings | `prefix` regex, `data`, `continuation` |
+| **widget block** | buttons, link cards, queries, databases, charts, TOC | ```` ```fence ```` or one-line `pattern`, `render(ctx)` that draws into `ctx.el`, `ctx.setSource()` to persist state, optional `live` |
+| **suggester** | `/` menu, `[[` / `@` / `#` autocomplete | `trigger`, `items(query)` → `{ label, detail, icon, apply }` |
+
+A widget example: a counter whose state lives in the markdown.
+
+```ts
+registerExtension({
+  name: "counter",
+  blocks: [{
+    kind: "widget", name: "counter", pattern: /\{\{count:(\d+)\}\}/,
+    render({ el, match, setSource }) {
+      const b = document.createElement("button");
+      b.textContent = `clicked ${match![1]}`;
+      b.onclick = () => setSource(`{{count:${+match![1] + 1}}}`); // undoable, saved in the document
+      el.append(b);
+    },
+  }],
+});
+```
+
+Rules the engine enforces: inline `parts` must add up to the matched text (otherwise the extension is ignored), and
+anything you draw goes in `[data-tm-ui]` mounts, which never count as document text.
 
 ## Theming
 
@@ -145,8 +241,9 @@ That invariant is what makes the editor feel seamless:
    inline element touching the caret gets `.md-expand` (shows its `**` / `` ` `` / `[..](..)`).
 4. Structural edits (Enter, merges, cross-block selections, paste, undo) are model operations, never browser ones.
 
-Things that add pixels but no text — KaTeX formulas (shadow DOM), images, task checkboxes — never contribute
-characters, so the invariant holds. `test/model.test.ts` checks it for every block and inline type.
+Things that add pixels but no text never contribute characters, so the invariant holds: KaTeX formulas and diagram
+previews (shadow DOM), images, task checkboxes, embeds and extension widgets (`[data-tm-ui]` mounts, skipped by the
+source reader). Source mode is the same DOM with every `md-meta` span shown and previews hidden. `test/model.test.ts` checks it for every block and inline type.
 
 ## Develop
 

@@ -21,8 +21,34 @@ export function blockElOf(node: Node | null, root: HTMLElement): HTMLElement | n
   return null;
 }
 
+/** UI subtrees (widgets, embeds, property panels) hold no markdown source. */
+const UI = "[data-tm-ui]";
+const inUi = (n: Node, blockEl: HTMLElement) => {
+  const el = n.nodeType === 1 ? (n as Element) : n.parentElement;
+  const ui = el?.closest(UI);
+  return !!ui && blockEl.contains(ui);
+};
+
+function sourceTextNodes(blockEl: HTMLElement): Text[] {
+  const out: Text[] = [];
+  const walker = document.createTreeWalker(blockEl, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, {
+    acceptNode: (n) =>
+      n.nodeType === 1 ? ((n as Element).matches(UI) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_SKIP) : NodeFilter.FILTER_ACCEPT,
+  });
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) out.push(n as Text);
+  return out;
+}
+
+/** The block's markdown source: its text, minus UI subtrees. */
+export function sourceText(blockEl: HTMLElement): string {
+  return sourceTextNodes(blockEl)
+    .map((t) => t.data)
+    .join("");
+}
+
 /** Raw offset of (node, offset) inside blockEl. */
 export function rawOffset(blockEl: HTMLElement, node: Node, offset: number): number {
+  if (inUi(node, blockEl)) return 0;
   const r = document.createRange();
   r.setStart(blockEl, 0);
   try {
@@ -30,7 +56,14 @@ export function rawOffset(blockEl: HTMLElement, node: Node, offset: number): num
   } catch {
     return 0;
   }
-  return r.toString().length;
+  let acc = 0;
+  for (const t of sourceTextNodes(blockEl)) {
+    if (t === node) return acc + offset;
+    // text nodes come in document order: count each one that ends at or before the point
+    if (r.comparePoint(t, t.length) !== 0) break;
+    acc += t.length;
+  }
+  return acc;
 }
 
 export function posOf(root: HTMLElement, node: Node | null, offset: number): Pos | null {
@@ -50,6 +83,7 @@ export function posOf(root: HTMLElement, node: Node | null, offset: number): Pos
 function isVisible(t: Text, blockEl: HTMLElement): boolean {
   const metaEl = t.parentElement?.closest(".md-meta");
   if (!metaEl || !blockEl.contains(metaEl)) return true;
+  if (blockEl.closest(".tm-source-mode")) return true; // source mode: every character is on screen
   if (metaEl.classList.contains("md-pipe")) return false;
   if (metaEl.classList.contains("md-block-meta")) return blockEl.classList.contains("md-focus");
   return !!metaEl.closest(".md-expand");
@@ -71,10 +105,9 @@ export function placeCaret(blockEl: HTMLElement, off: number, focusOff?: { el: H
 }
 
 export function domPoint(blockEl: HTMLElement, off: number): { node: Node; offset: number } {
-  const walker = document.createTreeWalker(blockEl, NodeFilter.SHOW_TEXT);
   let acc = 0;
   let fallback: { node: Node; offset: number } | null = null;
-  for (let t = walker.nextNode() as Text | null; t; t = walker.nextNode() as Text | null) {
+  for (const t of sourceTextNodes(blockEl)) {
     const len = t.data.length;
     if (off >= acc && off <= acc + len) {
       const p = { node: t, offset: off - acc };

@@ -1,6 +1,6 @@
 {
   "name": "typemark-lite",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Framework-free seamless live-preview markdown editing engine (Typora-style): syntax appears only where the caret is.",
   "type": "module",
   "main": "./dist/typemark.js",

@@ -108,6 +108,32 @@ const RULES: Rule[] = [
   },
 ];
 
+import { InlineExtension, registry } from "./extension";
+
+const attrName = (k: string) => k.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+
+/** Render an extension match; null when its parts don't add up to the match (invariant guard). */
+function renderExt(ext: InlineExtension, m: RegExpExecArray, at: number): string | null {
+  const parts = ext.parts?.(m) ?? [{ text: m[0] }];
+  if (parts.map((p) => p.text).join("") !== m[0]) {
+    console.warn(`[typemark] inline extension "${ext.name}": parts do not concatenate to the match; ignored`);
+    return null;
+  }
+  let off = at;
+  let inner = "";
+  for (const p of parts) {
+    inner += p.meta ? meta(p.text) : p.inline ? renderInline(p.text, off) : esc(p.text);
+    off += p.text.length;
+  }
+  const data = ext.data?.(m) ?? {};
+  const attrs =
+    ` data-ext="${esc(ext.name)}"` +
+    Object.entries(data)
+      .map(([k, v]) => ` data-${attrName(k)}="${esc(String(v))}"`)
+      .join("");
+  return wrap("span", `md-x md-x-${attrName(ext.name)}`, at, m[0].length, inner, attrs);
+}
+
 /** Characters that may start an inline rule; everything else is plain text. */
 const TRIGGER = /[\\`!\[*_~=$]/;
 
@@ -118,7 +144,20 @@ export function renderInline(src: string, base = 0): string {
   while (i < src.length) {
     const ch = src[i];
     let matched = false;
-    if (TRIGGER.test(ch)) {
+    for (const ext of registry.inline) {
+      if (!src.startsWith(ext.trigger, i)) continue;
+      ext.pattern.lastIndex = i;
+      const m = ext.pattern.exec(src);
+      if (!m || !m[0].length || (ext.accept && !ext.accept(m, src, i))) continue;
+      const html = renderExt(ext, m, base + i);
+      if (html === null) continue;
+      out += esc(plain) + html;
+      plain = "";
+      i += m[0].length;
+      matched = true;
+      break;
+    }
+    if (!matched && TRIGGER.test(ch)) {
       // `_` only opens emphasis at a word boundary (snake_case stays plain)
       const intraword = ch === "_" && i > 0 && /\w/.test(src[i - 1]);
       for (const rule of RULES) {

@@ -3,3 +3,8 @@ declare module "*.css?raw" {
   export default css;
 }
 declare module "*.css";
+
+declare module "*?raw" {
+  const text: string;
+  export default text;
+}

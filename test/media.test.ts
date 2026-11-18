@@ -63,8 +63,8 @@ describe("embeds", () => {
     const el = document.createElement("div");
     const ed = createEditor(el, { value: "" });
     ed.exec({ type: "embed", url: "https://vimeo.com/42" });
-    expect(ed.getMarkdown()).toContain("player.vimeo.com/video/42");
-    expect(el.querySelector(".md-embed iframe")).not.toBeNull();
+    expect(ed.getMarkdown()).toBe("@[](https://vimeo.com/42)\n\n");
+    expect(el.querySelector(".md-embed iframe")!.getAttribute("src")).toBe("https://player.vimeo.com/video/42");
   });
 });
 

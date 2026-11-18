@@ -176,3 +176,80 @@
 .tm-editor .md-embed audio { display: block; width: 100%; }
 .tm-editor .md-embed-note { font-size: .85em; color: var(--tm-quote); background: var(--tm-code-bg); border-radius: 6px; padding: 10px 12px; }
 .tm-editor.tm-readonly .md-embed, .tm-editor.tm-readonly .md-image img { cursor: default; }
+
+/* ---- widget blocks: source hidden until focused ---- */
+.tm-editor .md-widget-src { display: none; font: .85em/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--tm-code-bg); border-radius: 6px; padding: 6px 10px; margin-bottom: .4em; }
+.tm-editor .md-focus > .md-widget-src { display: block; }
+.tm-editor .md-focus > .md-widget-src > .md-meta { display: inline; color: var(--tm-fg); }
+.tm-editor .md-widget { cursor: default; }
+.tm-editor .md-embed-caption { font-size: .85em; color: var(--tm-quote); text-align: center; margin-top: .35em; }
+.tm-editor .md-custom > .md-block-meta { color: var(--tm-meta); }
+
+/* ---- front matter as a properties panel ---- */
+.tm-editor .md-frontmatter { border-bottom: 1px solid var(--tm-border); padding-bottom: .6em; }
+.tm-editor .md-props { display: grid; grid-template-columns: max-content 1fr; gap: .25em 1.2em; font-size: .9em; cursor: pointer; }
+.tm-editor .md-focus > .md-props { opacity: .55; }
+.tm-editor .md-prop { display: contents; }
+.tm-editor .md-prop-key { color: var(--tm-meta); }
+.tm-editor .md-prop-val { color: var(--tm-fg); }
+.tm-editor .md-prop-pill { display: inline-block; background: var(--tm-code-bg); border-radius: 1em; padding: 0 .55em; margin-right: .3em; }
+
+/* ---- suggestion menu ---- */
+.tm-suggest {
+  position: absolute; z-index: 1000; min-width: 240px; max-width: 360px; max-height: 320px; overflow-y: auto;
+  background: var(--tm-bg, #fff); color: var(--tm-fg, #333); border: 1px solid var(--tm-border, #ddd); border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.18), 0 2px 6px rgba(0,0,0,.08); padding: 4px;
+  font: 14px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+.tm-suggest-item { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.tm-suggest-active { background: color-mix(in srgb, var(--tm-accent, #4183c4) 15%, transparent); }
+.tm-suggest-icon { width: 26px; height: 26px; flex: none; display: grid; place-items: center; border-radius: 6px; background: var(--tm-code-bg, #f3f4f4); font-size: 12px; font-weight: 600; }
+.tm-suggest-label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tm-suggest-detail { color: var(--tm-meta, #999); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }
+
+/* ---- forced themes (data-theme on the editor or any ancestor) ---- */
+[data-theme="light"] .tm-editor, .tm-editor[data-theme="light"] {
+  --tm-fg: #333; --tm-bg: #fff; --tm-meta: #b4b4b4; --tm-accent: #4183c4; --tm-code-bg: #f3f4f4; --tm-quote: #777; --tm-border: #dfe2e5;
+}
+[data-theme="dark"] .tm-editor, .tm-editor[data-theme="dark"] {
+  --tm-fg: #d6d6d6; --tm-bg: #1e1f22; --tm-meta: #6b6e75; --tm-accent: #6cb6ff; --tm-code-bg: #2b2d31; --tm-quote: #9a9a9a; --tm-border: #3a3d42;
+}
+
+/* ---- focus mode: everything but the caret block fades ---- */
+.tm-editor.tm-focus-mode .md-block { transition: opacity .2s; }
+.tm-editor.tm-focus-mode .md-block:not(.md-focus) { opacity: .28; }
+
+/* ---- source mode: same DOM, every syntax character shown, rendering switched off ---- */
+.tm-editor.tm-source-mode { font: 14.5px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.tm-source-mode .md-meta,
+.tm-source-mode .md-pipe { display: inline !important; color: var(--tm-meta); opacity: 1 !important; width: auto !important; letter-spacing: normal !important; }
+.tm-source-mode .md-math-src, .tm-source-mode .md-math-body { color: var(--tm-fg) !important; }
+.tm-source-mode .md-widget-src, .tm-source-mode .md-html-src, .tm-source-mode .md-math-block-src { display: block !important; background: none; padding: 0; margin: 0; border-radius: 0; font: inherit; }
+.tm-source-mode [data-tm-ui], .tm-source-mode tm-math, .tm-source-mode tm-preview, .tm-source-mode .md-image img { display: none !important; }
+/* flatten typography: headings, quotes, lists, callouts become plain lines */
+.tm-source-mode .md-block { margin: 0 0 .1em; padding: 0 !important; border: 0 !important; background: none !important; font: inherit; color: var(--tm-fg); min-height: 1.7em; }
+.tm-source-mode .md-block::before, .tm-source-mode .md-block::after { content: none !important; display: none !important; }
+.tm-source-mode h1, .tm-source-mode h2, .tm-source-mode h3, .tm-source-mode h4, .tm-source-mode h5, .tm-source-mode h6 { font-weight: 700; color: var(--tm-fg); }
+.tm-source-mode .md-heading > .md-block-meta { color: var(--tm-accent); }
+/* one empty line between blocks, exactly where the markdown has a blank line */
+.tm-editor.tm-source-mode > .md-block { margin: 0 !important; }
+.tm-editor.tm-source-mode > .md-block + .md-block { margin-top: 1.7em !important; }
+.tm-editor.tm-source-mode > :is(.md-ul, .md-ol, .md-task) + :is(.md-ul, .md-ol, .md-task),
+.tm-editor.tm-source-mode > .md-quote + .md-quote { margin-top: 0 !important; }
+.tm-source-mode .md-focus.md-ul > .md-block-meta, .tm-source-mode .md-focus.md-ol > .md-block-meta,
+.tm-source-mode .md-ul > .md-block-meta, .tm-source-mode .md-ol > .md-block-meta, .tm-source-mode .md-task > .md-block-meta { margin-left: 0 !important; min-width: 0; display: inline !important; }
+.tm-source-mode .md-ul, .tm-source-mode .md-ol, .tm-source-mode .md-task { padding-left: 0 !important; }
+.tm-source-mode strong, .tm-source-mode em, .tm-source-mode del, .tm-source-mode mark, .tm-source-mode a, .tm-source-mode code.md-code, .tm-source-mode sup, .tm-source-mode .md-x {
+  font: inherit; background: none; padding: 0; border-radius: 0; text-decoration: none; vertical-align: baseline;
+}
+.tm-source-mode strong { font-weight: 700; }
+.tm-source-mode em { font-style: italic; }
+.tm-source-mode a, .tm-source-mode .md-x { color: var(--tm-accent); }
+.tm-source-mode .md-fn-ref::before, .tm-source-mode .md-fn-ref::after { content: none !important; }
+/* tables and code become plain text lines */
+.tm-source-mode table, .tm-source-mode thead, .tm-source-mode tbody, .tm-source-mode tr { display: block !important; border: 0; background: none !important; }
+.tm-source-mode th, .tm-source-mode td { display: inline !important; border: 0 !important; padding: 0 !important; font: inherit; background: none !important; text-align: left !important; }
+.tm-source-mode pre.md-code-block, .tm-source-mode .md-code[data-preview] > pre { display: block !important; background: none; padding: 0; font: inherit; border-radius: 0; }
+.tm-source-mode .md-code:not(.md-focus) pre[data-lang]::before { content: none; }
+.tm-source-mode .md-hr .md-block-meta { color: var(--tm-meta) !important; }
+.tm-source-mode .md-hr { height: auto; line-height: inherit; overflow: visible; }

@@ -12,3 +12,27 @@ export { registerFenceRenderer, mermaidRenderer } from "./preview";
 export type { FenceRenderer } from "./preview";
 export { embedHtmlFor, defaultEmbedPolicy, fileToDataUrl } from "./media";
 export type { EmbedPolicy } from "./media";
+export { registerExtension, unregisterExtension } from "./extension";
+export type {
+  Extension,
+  InlineExtension,
+  InlinePart,
+  BlockExtension,
+  PrefixBlockExtension,
+  WidgetBlockExtension,
+  WidgetContext,
+  Suggester,
+  SuggestItem,
+} from "./extension";
+export {
+  coreExtensions,
+  embedExtension,
+  tocExtension,
+  calloutExtension,
+  slashMenu,
+  wikilinks,
+  tags,
+  mentions,
+  actionButtons,
+} from "./extensions";
+export type { LinkerOptions, ButtonSpec } from "./extensions";
