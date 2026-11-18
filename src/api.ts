@@ -44,3 +44,6 @@ export { extractMetadata, buildBacklinks } from "./metadata";
 export type { DocumentMetadata, Backlink, Located } from "./metadata";
 export { Finder } from "./find";
 export type { FindOptions, FindMatch } from "./find";
+export { connectAgent, resolveQuote, BRIDGE_PROTOCOL } from "./bridge";
+export type { AgentBridge, AgentBridgeOptions } from "./bridge";
+export type { AIReviewEvents } from "./ai";

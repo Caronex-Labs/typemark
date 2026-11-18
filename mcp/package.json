@@ -1,0 +1,23 @@
+{
+  "name": "typemark-mcp",
+  "version": "0.4.0",
+  "private": true,
+  "description": "MCP server bridging a coding agent to live typemark editors (review layer as tools).",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "build": "esbuild server.ts --bundle --platform=node --target=node20 --format=esm --external:bufferutil --external:utf-8-validate --banner:js=\"import { createRequire as __cr } from 'module'; const require = __cr(import.meta.url);\" --outfile=../claude-plugin/server/typemark-mcp.mjs",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "ws": "8.18.0",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.2",
+    "@types/ws": "8.5.13",
+    "esbuild": "0.24.2",
+    "typescript": "5.6.3"
+  }
+}

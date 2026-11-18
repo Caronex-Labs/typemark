@@ -1,4 +1,4 @@
-# typemark-lite
+# typemark
 
 A small, framework-free markdown editing engine with Typora-style **seamless live preview**: you see a rendered document,
 and markdown syntax appears only around the caret. The source of truth is always plain markdown.
@@ -15,19 +15,28 @@ and markdown syntax appears only around the caret. The source of truth is always
 
 ## Install
 
-Not published to npm. Use it from a local path or git:
-
 ```bash
-npm install ../typemark-lite                 # local path (run `npm run build` in typemark-lite first)
-npm install ./typemark-lite-0.2.0.tgz        # tarball from `npm run pack:local`
-npm install git+ssh://<your-remote>/typemark-lite.git
+npm install typemark
 ```
+
+Or with no build step (one ES module with its dependencies bundled):
+
+```html
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/typemark@0.4.0/dist/style.css">
+<script type="module">
+  import { createEditor } from "https://cdn.jsdelivr.net/npm/typemark@0.4.0/dist/typemark.standalone.js";
+  createEditor(document.querySelector("#editor"), { value: "# Hello" });
+</script>
+```
+
+See `examples/cdn.html`.
 
 ## Use
 
 ```ts
-import { createEditor } from "typemark-lite";
-import "typemark-lite/style.css";
+import { createEditor } from "typemark";
+import "typemark/style.css";
 
 const editor = createEditor(document.querySelector("#editor")!, {
   value: "# Hello\n\nStart *writing*.",
@@ -187,7 +196,7 @@ Extensions declare **syntax** and **hooks**; markdown stays the only source of t
 `registerExtension(ext)` (returns an unregister function).
 
 ```ts
-import { registerExtension, wikilinks, tags, mentions, actionButtons } from "typemark-lite";
+import { registerExtension, wikilinks, tags, mentions, actionButtons } from "typemark";
 
 registerExtension(wikilinks({ onOpen: (t) => router.open(t), exists: (t) => db.has(t), suggest: (q) => db.search(q) }));
 registerExtension(tags({ onOpen: (t) => search("#" + t) }));
@@ -248,6 +257,28 @@ anything you draw goes in `[data-tm-ui]` mounts, which never count as document t
 | Esc (in a thread card) | Return focus to the caret |
 | Esc (suggestion menu) | Close the menu |
 
+## Claude Code plugin and agent bridge
+
+The repo is also a Claude Code plugin marketplace. The plugin teaches Claude to build pages on typemark and gives it
+MCP tools to **review a live document as you write**: suggested edits, notes, thread replies, `@ai` instructions.
+
+```bash
+claude plugin marketplace add Caronex-Labs/typemark
+claude plugin install typemark@typemark
+```
+
+In the page, connect the editor to the local bridge (127.0.0.1 only; localhost pages only by default):
+
+```ts
+import { connectAgent } from "typemark";
+connectAgent(editor, { docId: "my-doc" }); // ws://127.0.0.1:4799
+```
+
+Then ask Claude to "review my doc as I write". It calls `read_document`, `get_thread`, `suggest_edit`,
+`add_note`, `suggest_blocks`, `set_marks`, `reply_in_thread`, `resolve_instruction` and loops on
+`wait_for_activity` (blocks you finish, your replies, `@ai` instructions). Every tool anchors by quoting text.
+Settings: `TYPEMARK_BRIDGE_PORT` (default 4799), `TYPEMARK_ALLOWED_ORIGINS` (extra page origins, comma-separated).
+
 ## Theming
 
 Everything lives under `.tm-editor`. Override the custom properties (light and dark are built in):
@@ -283,7 +314,7 @@ source reader). Source mode is the same DOM with every `md-meta` span shown and 
 npm run dev        # demo at index.html
 npm test           # vitest (jsdom)
 npm run build      # dist/: typemark.js, style.css, *.d.ts
-npm run pack:local # release/typemark-lite-<version>.tgz
+npm run pack:local # release/typemark-<version>.tgz
 ```
 
 Node: `^22.12 || >=24` (Vite 5).

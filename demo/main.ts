@@ -1,4 +1,4 @@
-import { actionButtons, createEditor, mentions, mermaidRenderer, registerExtension, tags, wikilinks } from "../src/index";
+import { actionButtons, connectAgent, createEditor, mentions, mermaidRenderer, registerExtension, tags, wikilinks } from "../src/index";
 import type { Thread, Unit } from "../src/index";
 import sample from "./sample.md?raw";
 
@@ -262,3 +262,19 @@ $("#r-accept").onclick = () => (ed.ai.acceptAll(), updateReview());
 $("#r-reject").onclick = () => (ed.ai.rejectAll(), updateReview());
 ed.root.addEventListener("click", () => setTimeout(updateReview, 0));
 for (const b of document.querySelectorAll<HTMLElement>(".review button")) b.addEventListener("mousedown", (e) => e.preventDefault());
+
+// ---- live agent bridge: if the typemark MCP server (Claude Code plugin) is running,
+// Claude can review this page. Harmless when nothing is listening (it just retries).
+const dot = document.createElement("span");
+dot.id = "agent-status";
+dot.title = "Agent bridge";
+document.querySelector(".bar .spacer")?.after(dot);
+const bridge = connectAgent(ed, {
+  docId: "demo",
+  onStatus: (s) => {
+    dot.dataset.status = s;
+    dot.textContent = s === "connected" ? "Claude connected" : "";
+    dot.title = `Agent bridge: ${s}`;
+  },
+});
+(window as unknown as { bridge: typeof bridge }).bridge = bridge;

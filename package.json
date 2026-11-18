@@ -1,6 +1,6 @@
 {
-  "name": "typemark-lite",
-  "version": "0.3.0",
+  "name": "typemark",
+  "version": "0.4.0",
   "description": "Framework-free seamless live-preview markdown editing engine (Typora-style): syntax appears only where the caret is.",
   "type": "module",
   "main": "./dist/typemark.js",
@@ -56,5 +56,14 @@
     "./src/math.ts",
     "./src/api.ts",
     "./src/preview.ts"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Caronex-Labs/typemark.git"
+  },
+  "homepage": "https://github.com/Caronex-Labs/typemark#readme",
+  "bugs": {
+    "url": "https://github.com/Caronex-Labs/typemark/issues"
+  },
+  "author": "Sameeran Bandishti"
 }

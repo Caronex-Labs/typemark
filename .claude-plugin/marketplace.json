@@ -1,6 +1,9 @@
 {
   "name": "typemark",
-  "owner": { "name": "Sameeran Bandishti" },
+  "description": "typemark: seamless markdown editing engine with an AI review layer, plus MCP tools for Claude to review documents live.",
+  "owner": {
+    "name": "Sameeran Bandishti"
+  },
   "plugins": [
     {
       "name": "typemark",

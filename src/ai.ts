@@ -164,6 +164,13 @@ export interface Thread {
   history: ThreadEvent[];
 }
 
+/** Events for code that attaches to a live editor (agent bridges, analytics) without owning its options. */
+export interface AIReviewEvents {
+  settled(unit: Unit, ctx: { reason: "left" | "idle"; thread: Thread | null }): void;
+  reply(thread: Thread, text: string): void;
+  instruction(job: InstructionJob): void;
+}
+
 export interface AIReviewOptions {
   /**
    * The writer finished with a unit they edited: they moved the caret to another unit
@@ -287,6 +294,7 @@ export class AIReview {
   private replyDrafts = new Map<string, string>();
   private noteEvents = new Map<string, ThreadEvent>();
   private knownMd = "";
+  private listeners: { [K in keyof AIReviewEvents]: AIReviewEvents[K][] } = { settled: [], reply: [], instruction: [] };
   private threads = new Map<string, ThreadRec>();
   private dirty = new Set<number>();
   private settleTimer = 0;
@@ -318,6 +326,16 @@ export class AIReview {
     this.card?.remove();
     this.clearDom();
     if (hasHighlights()) for (const n of HIGHLIGHTS) CSS.highlights.delete(n);
+  }
+
+  /** Subscribe to review events; returns an unsubscribe function. */
+  on<K extends keyof AIReviewEvents>(event: K, fn: AIReviewEvents[K]): () => void {
+    (this.listeners[event] as AIReviewEvents[K][]).push(fn);
+    if (event === "reply") this.render(); // reply boxes appear once someone listens
+    return () => {
+      const l = this.listeners[event] as AIReviewEvents[K][];
+      l.splice(l.indexOf(fn), 1);
+    };
   }
 
   // ---------------------------------------------------------------- units + threads
@@ -433,7 +451,9 @@ export class AIReview {
     const u = this.getDirtyUnits().find((x) => x.id === unitId);
     if (!u) return;
     this.markReviewed(u);
-    this.opts.onUnitSettled?.(u, { reason, thread: this.getThread(u.id), review: this });
+    const thread = this.getThread(u.id);
+    this.opts.onUnitSettled?.(u, { reason, thread, review: this });
+    for (const f of this.listeners.settled) f(u, { reason, thread });
   }
 
   private onSelection = (): void => {
@@ -712,7 +732,8 @@ export class AIReview {
     };
     this.render();
     void Promise.resolve(this.opts.onInstruction?.(job)).catch((e) => job.fail(String(e?.message ?? e)));
-    if (!this.opts.onInstruction) job.fail("No AI agent is connected (onInstruction is not set).");
+    for (const f of this.listeners.instruction) f(job);
+    if (!this.opts.onInstruction && !this.listeners.instruction.length) job.fail("No AI agent is connected.");
     return id;
   }
 
@@ -1090,7 +1111,7 @@ export class AIReview {
     }
     // ONE reply box per thread
     const replyTarget = [...notes].reverse().find((n) => n.onReply);
-    if (this.opts.onThreadReply || replyTarget) {
+    if (this.opts.onThreadReply || replyTarget || this.listeners.reply.length) {
       const row = document.createElement("div");
       row.className = "tm-ph-actions tm-ph-replyrow";
       const ta = document.createElement("textarea");
@@ -1108,8 +1129,9 @@ export class AIReview {
         if (replyTarget) (replyTarget.replies ??= []).push({ author: "You", body: text });
         this.render();
         const thread = this.getThread(unit.id)!;
+        for (const f of this.listeners.reply) f(thread, text);
         if (this.opts.onThreadReply) await this.opts.onThreadReply(thread, text);
-        else await replyTarget!.onReply!(text, replyTarget!);
+        else if (replyTarget?.onReply) await replyTarget.onReply(text, replyTarget);
       };
       ta.addEventListener("keydown", (e) => {
         e.stopPropagation();
