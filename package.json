@@ -7,7 +7,7 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && tsc -p tsconfig.build.json",
+    "build": "vite build && vite build -c vite.standalone.config.ts && tsc -p tsconfig.build.json",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepack": "npm run build",
@@ -33,7 +33,7 @@
     "live-preview",
     "contenteditable"
   ],
-  "license": "UNLICENSED",
+  "license": "MIT",
   "module": "./dist/typemark.js",
   "exports": {
     ".": {
@@ -41,15 +41,20 @@
       "import": "./dist/typemark.js"
     },
     "./style.css": "./dist/style.css",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./standalone": "./dist/typemark.standalone.js"
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "sideEffects": [
     "**/*.css",
     "./dist/typemark.js",
-    "./src/math.ts"
+    "./dist/typemark.standalone.js",
+    "./src/math.ts",
+    "./src/api.ts",
+    "./src/preview.ts"
   ]
 }

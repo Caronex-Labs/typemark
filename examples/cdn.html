@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>typemark from a CDN</title>
+  <!-- From npm via a CDN, replace ../dist/ with https://cdn.jsdelivr.net/npm/typemark@VERSION/dist/ -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+  <link rel="stylesheet" href="../dist/style.css">
+  <style>body { margin: 0; background: #fff; } @media (prefers-color-scheme: dark) { body { background: #1e1f22; } }</style>
+</head>
+<body>
+  <div id="editor"></div>
+  <script type="module">
+    import { createEditor } from "../dist/typemark.standalone.js";
+    window.editor = createEditor(document.getElementById("editor"), {
+      value: "# One script tag\n\nThis page loads **typemark** as a single ES module, no bundler.\n\n- [ ] works offline once cached\n\nInline $e^{i\\pi}+1=0$\n\n```js\nconst x = 1;\n```",
+      onChange: (md) => console.log(md.length, "chars"),
+    });
+  </script>
+</body>
+</html>
