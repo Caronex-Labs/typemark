@@ -18,7 +18,8 @@ export function esc(s: string): string {
 
 export const meta = (s: string) => (s ? `<span class="md-meta">${esc(s)}</span>` : "");
 
-const SAFE_URL = /^(https?:|mailto:|#|\/|\.{0,2}\/|[^:]*$)/i;
+const unbracket = (u: string) => (u.startsWith("<") && u.endsWith(">") ? u.slice(1, -1) : u);
+const SAFE_URL = /^(https?:|mailto:|#|\/|\.{0,2}\/|data:image\/|blob:|[^:]*$)/i;
 const safeUrl = (u: string) => (SAFE_URL.test(u) ? esc(u) : "#");
 
 interface Rule {
@@ -62,26 +63,27 @@ const RULES: Rule[] = [
       wrap("sup", "md-fn-ref", at, m[0].length, meta("[^") + esc(m[1]) + meta("]"), ` data-fn="${esc(m[1])}"`),
   },
   {
-    re: /!\[([^\]]*)\]\(([^)\s]*)\)/y,
+    re: /!\[([^\]]*)\]\((<[^>\n]*>|[^)\s]*)(?:\s+"([^"\n]*)")?\)/y,
     render: (m, at) =>
       wrap(
         "span",
         "md-image",
         at,
         m[0].length,
-        meta(m[0]) + `<img src="${safeUrl(m[2])}" alt="${esc(m[1])}" contenteditable="false">`,
+        meta(m[0]) +
+          `<img src="${safeUrl(unbracket(m[2]))}" alt="${esc(m[1])}"${m[3] ? ` title="${esc(m[3])}"` : ""} data-src="${esc(unbracket(m[2]))}" contenteditable="false" draggable="false">`,
       ),
   },
   {
-    re: /\[([^\]]+)\]\(([^)\s]*)\)/y,
+    re: /\[([^\]]+)\]\((<[^>\n]*>|[^)\s]*)(?:\s+"[^"\n]*")?\)/y,
     render: (m, at) =>
       wrap(
         "a",
         "md-link",
         at,
         m[0].length,
-        meta("[") + renderInline(m[1], at + 1) + meta(`](${m[2]})`),
-        ` href="${safeUrl(m[2])}"`,
+        meta("[") + renderInline(m[1], at + 1) + meta(m[0].slice(1 + m[1].length)),
+        ` href="${safeUrl(unbracket(m[2]))}"`,
       ),
   },
   {

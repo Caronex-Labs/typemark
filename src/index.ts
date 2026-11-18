@@ -8,3 +8,7 @@ export type { EditorOptions, EditorState, Command, InlineFormat } from "./editor
 export { parse, serialize, renderBlock, blockType } from "./block";
 export type { Block, BlockType } from "./block";
 export { renderInline } from "./inline";
+export { registerFenceRenderer, mermaidRenderer } from "./preview";
+export type { FenceRenderer } from "./preview";
+export { embedHtmlFor, defaultEmbedPolicy, fileToDataUrl } from "./media";
+export type { EmbedPolicy } from "./media";

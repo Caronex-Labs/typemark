@@ -7,7 +7,8 @@
  * Invariant (same as inline): textContent(renderBlock(src)) === src.
  */
 import hljs from "highlight.js/lib/common";
-import { esc, meta, renderInline } from "./inline";
+import { esc, renderInline } from "./inline";
+import { hasFenceRenderer } from "./preview";
 
 export type BlockType =
   | "paragraph"
@@ -20,6 +21,7 @@ export type BlockType =
   | "math"
   | "table"
   | "footnote"
+  | "html"
   | "hr";
 
 export interface Block {
@@ -33,6 +35,7 @@ export const mkBlock = (src: string): Block => ({ id: newId(), src });
 
 const FENCE_OPEN = /^(`{3,}|~{3,})(.*)$/;
 const MATH_OPEN = /^\$\$\s*$/;
+const HTML_OPEN = /^<(iframe|video|audio)\b/i;
 const TABLE_SEP = /^\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/;
 const RE = {
   heading: /^(#{1,6} )([\s\S]*)$/,
@@ -49,6 +52,7 @@ export function blockType(src: string): BlockType {
   const first = src.split("\n", 1)[0];
   if (FENCE_OPEN.test(first)) return "code";
   if (MATH_OPEN.test(first)) return "math";
+  if (HTML_OPEN.test(first)) return "html";
   if (first.startsWith("|") && src.includes("\n") && TABLE_SEP.test(src.split("\n")[1])) return "table";
   if (RE.hr.test(src)) return "hr";
   for (const t of PREFIXED) if (RE[t].test(src)) return t;
@@ -110,6 +114,13 @@ export function parse(md: string): Block[] {
         body.push(lines[i]);
         if (fenceInfo(body.join("\n"))!.closed) break;
       }
+      out.push(mkBlock(body.join("\n")));
+      continue;
+    }
+    if (HTML_OPEN.test(line)) {
+      flush();
+      const body = [line];
+      while (i + 1 < lines.length && lines[i + 1].trim() !== "") body.push(lines[++i]);
       out.push(mkBlock(body.join("\n")));
       continue;
     }
@@ -176,14 +187,23 @@ function fencedHtml(src: string, kind: "code" | "math"): string {
       `<tm-math display tex="${esc(body)}" contenteditable="false"></tm-math>`
     );
   }
-  const lang = info.open.slice(info.closer.length).trim();
+  const lang = codeLang(src);
+  const preview = lang && hasFenceRenderer(lang)
+    ? `<tm-preview contenteditable="false" lang="${esc(lang.toLowerCase())}" code="${esc(body)}"></tm-preview>`
+    : "";
   return (
     `<pre class="md-code-block"${lang ? ` data-lang="${esc(lang)}"` : ""}>` +
     open +
     `<code class="hljs">${highlight(body, lang)}</code>` +
     close +
-    `</pre>`
+    `</pre>` +
+    preview
   );
+}
+
+export function codeLang(src: string): string {
+  const info = fenceInfo(src);
+  return info ? info.open.slice(info.closer.length).trim().split(/\s+/)[0] : "";
 }
 
 /** Split a table row at unescaped pipes; returns pipe indices. */
@@ -248,8 +268,21 @@ export function renderBlock(src: string): { tag: string; type: BlockType; html: 
     return bm(m[1]) + renderInline(m[2], m[1].length);
   };
   switch (type) {
-    case "code":
-      return { tag: "div", type, html: fencedHtml(src, "code"), attrs: "" };
+    case "code": {
+      const lang = codeLang(src);
+      const pv = lang && hasFenceRenderer(lang) ? ` data-preview="${esc(lang.toLowerCase())}"` : "";
+      return { tag: "div", type, html: fencedHtml(src, "code"), attrs: pv };
+    }
+    case "html":
+      // raw source (hidden until focused) + an empty mount the editor fills with a sanitised embed
+      return {
+        tag: "div",
+        type,
+        html:
+          `<div class="md-html-src"><span class="md-meta md-block-meta">${esc(src)}</span></div>` +
+          `<div class="md-embed" contenteditable="false" data-embed="${esc(src)}"></div>`,
+        attrs: "",
+      };
     case "math":
       return { tag: "div", type, html: fencedHtml(src, "math"), attrs: "" };
     case "table":

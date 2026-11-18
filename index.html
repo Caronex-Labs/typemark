@@ -16,12 +16,17 @@
     </style>
   </head>
   <body>
-    <div id="bar"><button id="toggle">Show markdown</button></div>
+    <div id="bar">
+      <button data-cmd="bold"><b>B</b></button><button data-cmd="italic"><i>I</i></button>
+      <button data-cmd="h2">H2</button><button data-cmd="imagePicker">Upload image</button>
+      <button data-cmd="imageUrl">Image URL</button><button data-cmd="embed">Embed</button>
+      <button data-cmd="diagram">Diagram</button><button id="toggle">Show markdown</button>
+    </div>
     <div id="editor"></div>
     <pre id="src"></pre>
     <script type="module">
       import "./src/style.css";
-      import { createEditor } from "./src/index.ts";
+      import { createEditor, mermaidRenderer } from "./src/index.ts";
 
       const sample = `# Welcome to typemark-lite
 
@@ -59,6 +64,21 @@ $$
 
 Footnotes work too.[^1] Cmd+click the marker to jump.
 
+## Images, embeds, diagrams
+
+Paste or drop an image anywhere, or use the toolbar. Click an image to edit its markdown.
+
+![Mountains](https://picsum.photos/id/1018/720/320 "Picsum")
+
+\`\`\`mermaid
+graph LR
+  A[Type markdown] --> B{Caret nearby?}
+  B -- yes --> C[Show syntax]
+  B -- no --> D[Show rendered]
+\`\`\`
+
+<iframe src="https://www.youtube.com/embed/aqz-KE-bpKQ" width="100%" height="360" allow="fullscreen" allowfullscreen></iframe>
+
 ---
 
 Also: ~~strike~~, ==highlight==, Cmd+B / Cmd+I / Cmd+E, Cmd+Z undo, and copy gives you markdown.
@@ -69,6 +89,7 @@ Also: ~~strike~~, ==highlight==, Cmd+B / Cmd+I / Cmd+E, Cmd+Z undo, and copy giv
       const ed = createEditor(document.getElementById("editor"), {
         value: localStorage.getItem("tm-doc") ?? sample,
         placeholder: "Start writing…",
+        renderers: { mermaid: mermaidRenderer(() => import("mermaid")) },
         onChange: (md) => {
           srcEl.textContent = md;
           try { localStorage.setItem("tm-doc", md); } catch {}
@@ -76,6 +97,19 @@ Also: ~~strike~~, ==highlight==, Cmd+B / Cmd+I / Cmd+E, Cmd+Z undo, and copy giv
       });
       srcEl.textContent = ed.getMarkdown();
       window.editor = ed;
+      const cmds = {
+        bold: () => ({ type: "bold" }),
+        italic: () => ({ type: "italic" }),
+        h2: () => ({ type: "heading", level: 2 }),
+        imagePicker: () => ({ type: "imagePicker" }),
+        imageUrl: () => { const src = prompt("Image URL"); return src && { type: "image", src, alt: "image" }; },
+        embed: () => { const url = prompt("YouTube / Vimeo / Loom / video URL"); return url && { type: "embed", url }; },
+        diagram: () => ({ type: "diagram" }),
+      };
+      for (const b of document.querySelectorAll("[data-cmd]")) {
+        b.onmousedown = (e) => e.preventDefault(); // keep the caret in the editor
+        b.onclick = () => { const c = cmds[b.dataset.cmd](); if (c) ed.exec(c); };
+      }
       document.getElementById("toggle").onclick = () => document.body.classList.toggle("show-src");
     </script>
   </body>

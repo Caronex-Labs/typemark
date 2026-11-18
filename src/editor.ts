@@ -12,6 +12,8 @@
  */
 import { Block, BlockType, blockType, continuation, fenceInfo, indentOf, mkBlock, parse, pipesOf, prefixLen, renderBlock, serialize } from "./block";
 import "./math";
+import { FenceRenderer, registerFenceRenderer } from "./preview";
+import { EmbedPolicy, altFromName, buildEmbed, defaultEmbedPolicy, embedHtmlFor, fileToDataUrl, mdUrl } from "./media";
 import { Pos, blockElOf, placeCaret, posOf } from "./caret";
 
 export interface EditorOptions {
@@ -27,6 +29,17 @@ export interface EditorOptions {
   readOnly?: boolean;
   /** Browser spellcheck (default true). */
   spellcheck?: boolean;
+  /**
+   * Store an image (from paste, drop or the picker) and return its URL.
+   * Default: inline as a data: URL — fine for demos, heavy for real documents.
+   */
+  uploadImage?: (file: File) => Promise<string>;
+  /** Map an image's markdown src to the URL the browser loads (e.g. resolve relative paths). */
+  resolveImageUrl?: (src: string) => string;
+  /** Which iframe/video/audio sources may load. Default: https, not this page's origin. */
+  embedPolicy?: EmbedPolicy;
+  /** Fence renderers by language, e.g. { mermaid: mermaidRenderer(() => import("mermaid")) }. Registered globally. */
+  renderers?: Record<string, FenceRenderer>;
 }
 
 /** Inline formats that can be toggled with `exec`. */
@@ -37,6 +50,10 @@ export type Command =
   | { type: "heading"; level: 0 | 1 | 2 | 3 | 4 | 5 | 6 }
   | { type: "bulletList" | "orderedList" | "taskList" | "quote" }
   | { type: "codeBlock" | "mathBlock" | "table" | "hr" }
+  | { type: "image"; src: string; alt?: string; title?: string }
+  | { type: "imagePicker" } // open a file dialog, upload, insert
+  | { type: "embed"; url: string } // YouTube/Vimeo/Loom/... URL, media file URL, or raw <iframe> HTML
+  | { type: "diagram"; lang?: string } // fenced block for a registered renderer (default "mermaid")
   | { type: "undo" | "redo" };
 
 /** What is under the caret, for toolbars and status bars. */
@@ -89,6 +106,7 @@ export class Editor {
     root.spellcheck = opts.spellcheck ?? true;
     if (opts.placeholder) root.dataset.placeholder = opts.placeholder;
     this.setReadOnly(!!opts.readOnly);
+    for (const [lang, r] of Object.entries(opts.renderers ?? {})) registerFenceRenderer(lang, r);
     this.setMarkdown(opts.value ?? "");
     const on = <K extends keyof HTMLElementEventMap>(t: K, f: (e: HTMLElementEventMap[K]) => void) =>
       root.addEventListener(t, (e) => !this.readOnly && f(e), { signal: this.abort.signal });
@@ -102,6 +120,11 @@ export class Editor {
     });
     on("copy", (e) => this.onCopy(e, false));
     on("cut", (e) => this.onCopy(e, true));
+    on("paste", (e) => this.onPasteFiles(e));
+    on("dragover", (e) => {
+      if (e.dataTransfer?.types.includes("Files")) e.preventDefault();
+    });
+    on("drop", (e) => this.onDropFiles(e));
     root.addEventListener("mousedown", (e) => this.onMouseDown(e), { signal: this.abort.signal });
     document.addEventListener("selectionchange", () => this.syncFocus(), { signal: this.abort.signal });
   }
@@ -178,6 +201,28 @@ export class Editor {
         return setPrefix("> ");
       case "hr":
         return this.insertBlockAfter(b, "---"), this.insertBlockAfter(this.blocks[this.index(b.id) + 1], "");
+      case "image": {
+        const md = `![${(cmd.alt ?? "").replace(/[\[\]]/g, "")}](${mdUrl(cmd.src)}${cmd.title ? ` "${cmd.title.replace(/"/g, "'")}"` : ""})`;
+        const at = sel.start;
+        return this.replaceRange(at, "end" in sel && sel.end ? sel.end : at, md);
+      }
+      case "imagePicker": {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = "image/*";
+        input.multiple = true;
+        const at = sel.start;
+        input.onchange = () => void this.insertImages(Array.from(input.files ?? []), at);
+        input.click();
+        return;
+      }
+      case "embed":
+        return this.insertBlock(b, embedHtmlFor(cmd.url), "end");
+      case "diagram": {
+        const lang = cmd.lang ?? "mermaid";
+        const starter = lang === "mermaid" ? "graph TD\n  A[Start] --> B[End]" : "";
+        return this.insertBlock(b, "```" + lang + "\n" + starter + "\n```", lang.length + 4);
+      }
       case "codeBlock":
       case "mathBlock":
       case "table": {
@@ -241,6 +286,13 @@ export class Editor {
     // empty code / math bodies get an empty text node so the caret has somewhere to live
     for (const body of el.querySelectorAll(".md-code-block > code, .md-math-body")) {
       if (!body.firstChild) body.append(document.createTextNode(""));
+    }
+    // decorations that add no text: resolved image URLs, sanitised embeds
+    if (this.opts.resolveImageUrl) {
+      for (const img of el.querySelectorAll<HTMLImageElement>("img[data-src]")) img.src = this.opts.resolveImageUrl(img.dataset.src!);
+    }
+    for (const mount of el.querySelectorAll<HTMLElement>(".md-embed[data-embed]")) {
+      mount.append(buildEmbed(mount.dataset.embed!, this.opts.embedPolicy ?? defaultEmbedPolicy));
     }
     return el;
   }
@@ -495,6 +547,54 @@ export class Editor {
     this.setCaret({ bid: b.id, off: target });
   }
 
+  /** Insert a new block after `b` (or replace `b` if it is empty); caret at `off` ("end" = end of block). */
+  private insertBlock(b: Block, src: string, off: number | "end"): void {
+    const nb = mkBlock(src);
+    const replace = b.src === "";
+    this.blocks.splice(this.index(b.id) + (replace ? 0 : 1), replace ? 1 : 0, nb);
+    if (this.index(nb.id) === this.blocks.length - 1) this.blocks.push(mkBlock("")); // room to keep typing
+    this.after({ bid: nb.id, off: off === "end" ? src.length : off });
+  }
+
+  /** Upload image files and insert them as markdown images at `at`. */
+  async insertImages(files: File[], at?: Pos): Promise<void> {
+    const imgs = files.filter((f) => f.type.startsWith("image/"));
+    if (!imgs.length) return;
+    const upload = this.opts.uploadImage ?? fileToDataUrl;
+    const urls = await Promise.all(imgs.map((f) => upload(f).catch(() => null)));
+    const md = imgs
+      .map((f, i) => (urls[i] ? `![${altFromName(f.name)}](${mdUrl(urls[i]!)})` : ""))
+      .filter(Boolean)
+      .join("\n\n");
+    if (!md || this.readOnly) return;
+    // the document may have changed while uploading: fall back to the end
+    const pos = at && this.block(at.bid) && at.off <= this.block(at.bid)!.src.length ? at : this.endOf(this.blocks[this.blocks.length - 1]);
+    this.replaceRange(pos, pos, md);
+  }
+
+  private onPasteFiles(e: ClipboardEvent): void {
+    const files = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type.startsWith("image/"));
+    if (!files.length) return;
+    e.preventDefault();
+    void this.insertImages(files, this.getSel()?.start);
+  }
+
+  private onDropFiles(e: DragEvent): void {
+    const files = Array.from(e.dataTransfer?.files ?? []).filter((f) => f.type.startsWith("image/"));
+    if (!files.length) return;
+    e.preventDefault();
+    // caret position under the pointer
+    const doc = document as Document & { caretPositionFromPoint?(x: number, y: number): { offsetNode: Node; offset: number } | null };
+    let pos: Pos | null = null;
+    const cp = doc.caretPositionFromPoint?.(e.clientX, e.clientY);
+    if (cp) pos = posOf(this.root, cp.offsetNode, cp.offset);
+    else {
+      const r = document.caretRangeFromPoint?.(e.clientX, e.clientY);
+      if (r) pos = posOf(this.root, r.startContainer, r.startOffset);
+    }
+    void this.insertImages(files, pos ?? undefined);
+  }
+
   private insertBlockAfter(b: Block, src: string): void {
     const nb = mkBlock(src);
     this.blocks.splice(this.index(b.id) + 1, 0, nb);
@@ -672,6 +772,23 @@ export class Editor {
       b.src = b.src.replace(/\[([ xX])\]/, (_m, c) => (c === " " ? "[x]" : "[ ]"));
       this.reconcile();
       this.commit("edit", null);
+      return;
+    }
+    if (target.tagName === "IMG" && target.closest(".md-image")) {
+      // click an image to edit its markdown (caret into the alt text)
+      e.preventDefault();
+      const inl = target.closest<HTMLElement>(".md-image")!;
+      const el = target.closest<HTMLElement>("[data-bid]")!;
+      this.root.focus();
+      this.setCaret({ bid: el.dataset.bid!, off: Number(inl.dataset.s) + 2 });
+      return;
+    }
+    if (target.tagName === "TM-PREVIEW" || target.classList.contains("md-embed") || target.classList.contains("md-embed-note")) {
+      e.preventDefault();
+      const el = target.closest<HTMLElement>("[data-bid]")!;
+      const src = this.block(el.dataset.bid!)!.src;
+      this.root.focus();
+      this.setCaret({ bid: el.dataset.bid!, off: target.tagName === "TM-PREVIEW" ? src.indexOf("\n") + 1 : src.length });
       return;
     }
     if (target.tagName === "TM-MATH") {
