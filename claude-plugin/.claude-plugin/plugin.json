@@ -1,0 +1,8 @@
+{
+  "name": "typemark",
+  "version": "0.4.0",
+  "description": "Build writing tools on typemark: a Typora-style seamless markdown editing engine with an AI review layer (Google-Docs-style suggestions, agent notes, one thread per block, @ai instructions). Claude builds pages and artifacts on it and can act as the reviewing agent.",
+  "author": { "name": "Sameeran Bandishti" },
+  "license": "MIT",
+  "keywords": ["markdown", "editor", "writing", "ai-review", "artifacts"]
+}
