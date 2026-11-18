@@ -1,6 +1,8 @@
 /** Suggestion popup (slash menu, [[ / @ / # autocomplete). Items come from Suggesters; this only draws and navigates. */
 import type { SuggestItem } from "./extension";
 
+let menuSeq = 0;
+
 export class SuggestMenu {
   private el: HTMLDivElement;
   private items: SuggestItem[] = [];
@@ -11,7 +13,12 @@ export class SuggestMenu {
     this.el = document.createElement("div");
     this.el.className = "tm-suggest";
     this.el.setAttribute("role", "listbox");
+    this.el.id = `tm-suggest-${++menuSeq}`;
+    this.el.setAttribute("aria-label", "Suggestions");
     this.el.hidden = true;
+    host.setAttribute("aria-haspopup", "listbox");
+    host.setAttribute("aria-expanded", "false");
+    host.setAttribute("aria-autocomplete", "list");
     // keep focus (and the caret) in the editor while clicking items
     this.el.addEventListener("mousedown", (e) => {
       e.preventDefault();
@@ -36,6 +43,7 @@ export class SuggestMenu {
     this.active = 0;
     this.render();
     this.el.hidden = false;
+    this.syncAria();
     const h = this.el.offsetHeight;
     const below = rect.bottom + 6 + h < innerHeight;
     this.el.style.left = `${Math.max(8, Math.min(rect.left, innerWidth - this.el.offsetWidth - 8)) + scrollX}px`;
@@ -44,6 +52,17 @@ export class SuggestMenu {
 
   hide(): void {
     this.el.hidden = true;
+    this.host.setAttribute("aria-expanded", "false");
+    this.host.removeAttribute("aria-controls");
+    this.host.removeAttribute("aria-activedescendant");
+  }
+
+  /** Point the editor's aria-activedescendant at the active option. */
+  private syncAria(): void {
+    if (this.el.hidden) return;
+    this.host.setAttribute("aria-expanded", "true");
+    this.host.setAttribute("aria-controls", this.el.id);
+    this.host.setAttribute("aria-activedescendant", `${this.el.id}-${this.active}`);
   }
 
   destroy(): void {
@@ -65,6 +84,7 @@ export class SuggestMenu {
   private move(d: number): void {
     this.active = (this.active + d + this.items.length) % this.items.length;
     this.render();
+    this.syncAria();
     this.el.querySelector(".tm-suggest-active")?.scrollIntoView?.({ block: "nearest" });
   }
 
@@ -73,7 +93,7 @@ export class SuggestMenu {
     this.el.innerHTML = this.items
       .map(
         (it, i) =>
-          `<div class="tm-suggest-item${i === this.active ? " tm-suggest-active" : ""}" role="option" data-i="${i}">` +
+          `<div class="tm-suggest-item${i === this.active ? " tm-suggest-active" : ""}" role="option" id="${this.el.id}-${i}" aria-selected="${i === this.active}" data-i="${i}">` +
           `<span class="tm-suggest-icon">${esc(it.icon ?? "")}</span>` +
           `<span class="tm-suggest-label">${esc(it.label)}</span>` +
           (it.detail ? `<span class="tm-suggest-detail">${esc(it.detail)}</span>` : "") +

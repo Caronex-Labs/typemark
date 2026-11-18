@@ -18,6 +18,7 @@ import { parse, renderBlock } from "./block";
 import type { DocChange, Editor } from "./editor";
 import { renderInline } from "./inline";
 import { INSTRUCTION as INSTRUCTION_RE } from "./extensions";
+import { aiEventText } from "./a11y";
 
 // ------------------------------------------------------------------ types
 
@@ -377,6 +378,8 @@ export class AIReview {
     if (!unit) return null;
     const e = { ...ev, time: Date.now() };
     this.threadFor(unit, true)!.history.push(e);
+    const spoken = aiEventText(e, this);
+    if (spoken) this.editor.announce(spoken);
     return e;
   }
 
@@ -1123,7 +1126,7 @@ export class AIReview {
       row.append(ta, button("Send", true, () => void send()));
       el.append(row);
     }
-    el.setAttribute("aria-label", `Review thread: ${notes.length} note${notes.length === 1 ? "" : "s"}, ${blocks.length + inline} suggestion${blocks.length + inline === 1 ? "" : "s"}`);
+    el.setAttribute("aria-label", `Review thread${authors.length ? ` from ${authors.join(", ")}` : ""}: ${notes.length} note${notes.length === 1 ? "" : "s"}, ${blocks.length + inline} suggestion${blocks.length + inline === 1 ? "" : "s"}`);
     return el;
   }
 
@@ -1334,7 +1337,7 @@ function phantomShell(kind: string, id: string): HTMLElement {
   el.dataset.tmAi = "";
   el.dataset.id = id;
   el.contentEditable = "false";
-  el.setAttribute("role", "note");
+  el.setAttribute("role", kind === "thread" ? "group" : "note");
   return el;
 }
 

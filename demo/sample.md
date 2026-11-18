@@ -21,6 +21,22 @@ Everything here is **plain markdown**. Move the caret into *any* formatted text,
 
 > [!warning] Everything you see is stored as markdown. Toggle **Source** in the top bar to watch it.
 
+> [!info]- A foldable callout: `-` starts collapsed, `+` expanded
+> The body is the `> ` lines right under the callout.
+> Click the chevron to toggle. Hover a heading to fold its section.
+
++++ A toggle block (`+++ Title` … `+++`)
+
+Anything can go inside: paragraphs, lists, code.
+
+- folded state is view-only; the markdown never changes
+
++++
+
+A URL alone on a line becomes a link card:
+
+https://github.com
+
 ## Media without buttons
 
 Type `![](` and paste an image URL, or press **Enter** inside `![]()` to pick a file. You can also paste or drop images anywhere.

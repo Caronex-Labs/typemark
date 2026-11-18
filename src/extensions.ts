@@ -17,6 +17,8 @@ import type { Editor } from "./editor";
 import type { Extension, SuggestItem } from "./extension";
 import { buildEmbed, defaultEmbedPolicy, embedHtmlFor } from "./media";
 import { fuzzy } from "./suggest";
+import { toggleExtension } from "./fold";
+import { linkCardExtension } from "./linkcard";
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
 
@@ -129,6 +131,8 @@ const SLASH: (Omit<SuggestItem, "apply"> & { ins: Ins })[] = [
   { icon: "▦", label: "Table", detail: "| a | b | ⏎", keywords: "grid columns", ins: { text: "| Column | Column |\n| --- | --- |\n|   |   |", caret: 2, block: true } },
   { icon: "🖼", label: "Image", detail: "![](url) · ⏎ to upload", keywords: "picture photo upload", ins: { text: "![]()", caret: 4 } },
   { icon: "▶", label: "Embed", detail: "@[](url)", keywords: "video youtube iframe vimeo loom", ins: { text: "@[]()", caret: 4 } },
+  { icon: "🔗", label: "Link card", detail: "https://… alone on a line", keywords: "bookmark url preview link", ins: { text: "https://", block: true } },
+  { icon: "▸", label: "Toggle", detail: "+++ Title ⏎ … +++", keywords: "collapse details fold toggle", ins: { text: "+++ " } },
   { icon: "≡", label: "Table of contents", detail: "[toc]", keywords: "outline toc", ins: { text: "[toc]" } },
   { icon: "—", label: "Divider", detail: "---", keywords: "hr rule separator", ins: { text: "---", block: true } },
   { icon: "¹", label: "Footnote", detail: "[^1]", keywords: "reference note", ins: { text: "[^1]" } },
@@ -173,7 +177,7 @@ export const instructionExtension: Extension = {
   ],
 };
 
-export const coreExtensions: Extension[] = [embedExtension, tocExtension, calloutExtension, instructionExtension, slashMenu()];
+export const coreExtensions: Extension[] = [embedExtension, tocExtension, calloutExtension, instructionExtension, toggleExtension, linkCardExtension, slashMenu()];
 
 // ---------------------------------------------------------------- opt-in: [[wikilinks]], #tags, @mentions
 

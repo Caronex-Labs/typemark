@@ -96,6 +96,9 @@ function MarkdownEditor({ value, onChange }: { value: string; onChange(md: strin
 | `getFrontmatter()` / `setFrontmatter(yaml \| null)` | document properties                  |
 | `insertImages(files, at?)` / `pickImage()` | upload through `uploadImage`               |
 | `refresh()`               | re-render after registering extensions on a live editor     |
+| `fold(id)` / `unfold(id)` / `toggleFold(id)` / `isFolded(id)` | collapse headings, callouts, `+++` toggles (view state) |
+| `getFolds()` / `setFolds(ids)` | folded block ids (ids live for the session; re-map after `setMarkdown`) |
+| option `linkPreview`      | `(url) => Promise<{title, description, image, siteName, favicon} \| null>`; cached per URL |
 | `undo()` / `redo()`       |                                                             |
 | `destroy()`               | remove all listeners; rendered content stays                |
 | `root`                    | the element                                                 |
@@ -139,7 +142,11 @@ Everything is typed. Syntax this engine invented is marked ★.
 | `# `, `## ` … | headings |
 | `- `, `1. `, `- [ ] ` | lists and tasks (Enter continues, Tab indents) |
 | `> `, `> > ` | quotes, nested |
-| `> [!note] ` / `tip` `info` `success` `warning` `danger` `bug` `example` `quote` `todo` | callouts (Obsidian syntax) |
+| `> [!note] ` / `tip` `info` `success` `warning` `danger` `bug` `example` `quote` `todo` | callouts (Obsidian syntax); the `> ` lines right under one are its body |
+| `> [!note]- T` / `> [!note]+ T` | foldable callout, starts collapsed / expanded (chevron toggles the view, not the marker) |
+| ★ `+++ Title` … `+++` | toggle block: the blocks between the fences are its body (Enter on an unclosed `+++ Title` adds the closing fence). Same syntax as Linear's collapsible sections, readable as plain text, no HTML |
+| ★ `https://…` alone on a line | link card; metadata comes from the host's `linkPreview(url)` option (host + URL without it) |
+| hover a heading's chevron, Cmd/Ctrl+Alt+`[` / `]` | fold / unfold a heading section (view state only) |
 | `**b**` `*i*` `` `c` `` `~~s~~` `==h==` `[t](url)` | inline formatting |
 | `![alt](url)` | image; ★ press **Enter** inside an empty `![]()` to pick a file; paste/drop an image to upload |
 | ★ `@[title](url)` | embed: YouTube, Vimeo, Loom, CodePen, Figma, audio/video files, any https page (sandboxed) |
@@ -165,7 +172,14 @@ Everything is typed. Syntax this engine invented is marked ★.
 | ```` ```lang ```` / `$$` + Enter | open a code / math block                        |
 | Cmd/Ctrl + click           | follow link · jump to footnote                        |
 
-Copy produces markdown, paste takes plain text (multi-line paste becomes blocks).
+Copy produces markdown. Paste converts rich HTML (web pages, Google Docs, Word) to clean markdown;
+Cmd/Ctrl+Shift+V pastes plain text (multi-line paste becomes blocks). Pasting a URL over a selection makes `[selection](url)`.
+
+**Typing aids** (option `typingAids`, default on; `false` or `{ wrap, pairs, smartPunctuation }` to tune;
+never inside code/math blocks, front matter or inline code):
+typing ``* _ ` ~ = [ ( "`` over a selection wraps it (type `*` twice for bold); `( [ {` and backtick
+auto-close before whitespace/punctuation, typing the closer steps over it and Backspace removes an
+empty pair; ` -- ` becomes ` — ` and `...` becomes `…`.
 
 ## Extensions
 
@@ -215,6 +229,24 @@ registerExtension({
 
 Rules the engine enforces: inline `parts` must add up to the matched text (otherwise the extension is ignored), and
 anything you draw goes in `[data-tm-ui]` mounts, which never count as document text.
+
+## Accessibility
+
+- The editor root is `role="textbox"` with `aria-multiline`, an `aria-label` (option `ariaLabel`, default "Markdown editor") and `aria-readonly`.
+- A visually hidden polite live region (`editor.liveRegion`) announces block conversions ("Heading 2", "Bulleted list"), undo/redo, source mode, task toggles and AI events (suggestion added/accepted/rejected, notes with kind and author, replies, comments). Hosts can speak through it with `editor.announce(text)`.
+- When the caret enters a highlight-only review range (inline deletion/replacement, comment, mark) its meaning is announced, since CSS highlights are invisible to assistive tech.
+- Task checkboxes are `role="checkbox"` with `aria-checked` and the task text as label. Image `alt` comes from the markdown.
+- The suggestion menu is a `listbox`; the editor carries `aria-expanded`, `aria-controls` and `aria-activedescendant` while it is open. Escape closes it and focus stays in the editor.
+- AI thread cards are labelled `group`s (authors, note and suggestion counts); every action is a real button.
+- The find panel is a `search` landmark with labelled inputs and a live match count ("3 of 12").
+- Visible `:focus-visible` rings on engine buttons and inputs; `prefers-reduced-motion` disables shimmer, blink and slide animations; `--tm-meta` (syntax characters, placeholder) meets 4.5:1 in light and dark.
+
+| Shortcut | Action |
+| --- | --- |
+| Cmd/Ctrl+Enter | Toggle the task on the caret line |
+| Alt+Shift+T | Move focus into the current block's review thread card |
+| Esc (in a thread card) | Return focus to the caret |
+| Esc (suggestion menu) | Close the menu |
 
 ## Theming
 

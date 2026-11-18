@@ -37,6 +37,9 @@ export {
   actionButtons,
 } from "./extensions";
 export type { LinkerOptions, ButtonSpec } from "./extensions";
+export { Folding, toggleExtension, foldRange } from "./fold";
+export { linkCardExtension } from "./linkcard";
+export type { LinkPreview, LinkPreviewFn } from "./linkcard";
 export { AIReview, createReview, diffWords, mapOffset, renderMarkdown } from "./ai";
 export type { Unit, Thread, ThreadEvent, ThreadEventType, InstructionJob, AIReviewOptions, Suggestion, SuggestionHandle, SuggestionDisplay, Note, NoteKind, NoteAction, Comment, Mark, MarkSeverity } from "./ai";
 export type { DocChange } from "./editor";

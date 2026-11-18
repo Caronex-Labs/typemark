@@ -61,7 +61,7 @@ function inline(node: Node): string {
     if (tag === "a") {
       const href = el.getAttribute("href") ?? "";
       const text = inner.trim();
-      if (href && !href.startsWith("javascript:")) inner = text && text !== href ? `[${text}](${/[\s()]/.test(href) ? `<${href}>` : href})` : `<${href}>`;
+      if (href && !href.startsWith("javascript:")) inner = text && (el.textContent ?? "").trim() !== href ? `[${text}](${/[\s()]/.test(href) ? `<${href}>` : href})` : `<${href}>`;
       s += inner;
       continue;
     }

@@ -8,6 +8,7 @@ const people = ["sam", "alex", "jordan", "riley"];
 const toast = (msg: string) => {
   const t = document.createElement("div");
   t.className = "toast";
+  t.setAttribute("role", "status");
   t.textContent = msg;
   document.body.append(t);
   setTimeout(() => t.classList.add("out"), 1800);
@@ -60,6 +61,12 @@ const ed = createEditor($("#editor"), {
   value: store.get("tm-doc") ?? sample,
   placeholder: "Start writing…  (type / for syntax)",
   renderers: { mermaid: mermaidRenderer(() => import("mermaid")) },
+  // mock link-card metadata: a real app would call its own unfurl endpoint
+  linkPreview: async (url) => {
+    await new Promise((r) => setTimeout(r, 400));
+    const host = new URL(url).host;
+    return { title: host === "github.com" ? "GitHub" : host, description: `Preview of ${url} supplied by the host app.`, siteName: host };
+  },
   ai: {
     settleMs: 2500,
     onUnitSettled: (unit) => void reviewUnit(unit),
@@ -138,6 +145,7 @@ const applyTheme = () => {
   else document.documentElement.dataset.theme = theme;
   $("#t-theme").dataset.theme = theme;
   $("#t-theme").title = `Theme: ${theme}`;
+  $("#t-theme").setAttribute("aria-label", `Theme: ${theme}`);
   store.set("tm-theme", theme);
 };
 $("#t-theme").onclick = () => {

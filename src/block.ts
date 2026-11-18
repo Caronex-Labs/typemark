@@ -157,7 +157,8 @@ export function parse(md: string): Block[] {
       continue;
     }
     const t = blockType(line);
-    if (t !== "paragraph") {
+    // a one-line widget (bare-URL link card, @[](url), [toc]) inside a paragraph stays paragraph text
+    if (t !== "paragraph" && !(t === "widget" && para.length)) {
       flush();
       out.push(mkBlock(line));
     } else para.push(line);
@@ -173,6 +174,8 @@ export function separator(prev: string, next: string): string {
   const a = blockType(prev);
   const t = blockType(next);
   const list = (x: BlockType) => x === "ul" || x === "ol" || x === "task";
+  // a callout's body is the `> ` lines right under it: `> [!note] T\n> body`
+  if (a === "custom" && t === "quote" && matchBlockExt(prev)?.ext.name === "callout") return "\n";
   return tight(a) && (a === t || (list(a) && list(t))) ? "\n" : "\n\n";
 }
 

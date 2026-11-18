@@ -16,6 +16,8 @@ import { Block, BlockType, blockType, continuation, fenceInfo, indentOf, mkBlock
 import "./math";
 import { SuggestItem, Suggester, matchBlockExt, registerExtension, registry } from "./extension";
 import { coreExtensions } from "./extensions";
+import { Folding } from "./fold";
+import type { LinkPreviewFn } from "./linkcard";
 import { SuggestMenu } from "./suggest";
 import { AIReview, AIReviewOptions } from "./ai";
 import { Finder } from "./find";
@@ -23,6 +25,8 @@ import { DocumentMetadata, extractMetadata } from "./metadata";
 import { FenceRenderer, registerFenceRenderer } from "./preview";
 import { EmbedPolicy, altFromName, buildEmbed, defaultEmbedPolicy, embedHtmlFor, fileToDataUrl, mdUrl } from "./media";
 import { Pos, blockElOf, domPoint, placeCaret, posOf, sourceText } from "./caret";
+import { Announcer, installA11y } from "./a11y";
+import { TypingAidOptions, TypingAids, TypingCtx } from "./typing";
 
 export interface EditorOptions {
   /** Initial markdown. */
@@ -54,6 +58,12 @@ export interface EditorOptions {
   coreExtensions?: boolean;
   /** Fence renderers by language, e.g. { mermaid: mermaidRenderer(() => import("mermaid")) }. Registered globally. */
   renderers?: Record<string, FenceRenderer>;
+  /** Metadata for link cards (a bare URL alone on a line). The engine never fetches by itself. */
+  linkPreview?: LinkPreviewFn;
+  /** Wrap selection on typed marks, auto-close brackets, smart punctuation (default all on). */
+  typingAids?: boolean | TypingAidOptions;
+  /** Accessible name of the editor (default "Markdown editor"). */
+  ariaLabel?: string;
 }
 
 /** Inline formats that can be toggled with `exec`. */
@@ -141,7 +151,9 @@ export class Editor {
   private changeHooks: ((c: DocChange) => void)[] = [];
   private renderHooks: (() => void)[] = [];
   private keyHooks: ((e: KeyboardEvent) => boolean)[] = [];
+  private typing!: TypingAids;
   private pointerHooks: ((e: MouseEvent, offset: number | null) => boolean)[] = [];
+  private announcer!: Announcer;
 
   constructor(root: HTMLElement, opts: EditorOptions = {}) {
     this.root = root;
@@ -153,16 +165,22 @@ export class Editor {
       coreRegistered = true;
       for (const x of coreExtensions) registerExtension(x);
     }
+    root.setAttribute("role", "textbox");
+    root.setAttribute("aria-multiline", "true");
+    root.setAttribute("aria-label", opts.ariaLabel ?? "Markdown editor");
+    this.announcer = new Announcer(root);
     this.menu = new SuggestMenu(root);
     this.menu.onChoose = (item) => this.applySuggestion(item);
     this.setReadOnly(!!opts.readOnly);
     for (const [lang, r] of Object.entries(opts.renderers ?? {})) registerFenceRenderer(lang, r);
     this.setMarkdown(opts.value ?? "");
+    installA11y(this, this.announcer, this.abort.signal);
     const on = <K extends keyof HTMLElementEventMap>(t: K, f: (e: HTMLElementEventMap[K]) => void) =>
       root.addEventListener(t, (e) => !this.readOnly && f(e), { signal: this.abort.signal });
     on("beforeinput", (e) => this.onBeforeInput(e as InputEvent));
     on("input", () => this.onInput());
-    on("keydown", (e) => this.onKeyDown(e));
+    this.typing = new TypingAids(opts.typingAids);
+    on("keydown", (e) => (this.typing.noteKey(e), this.onKeyDown(e)));
     on("compositionstart", () => (this.composing = true));
     on("compositionend", () => {
       this.composing = false;
@@ -179,11 +197,13 @@ export class Editor {
     document.addEventListener("selectionchange", () => this.syncFocus(), { signal: this.abort.signal });
     if (opts.ai) void this.ai;
     if (opts.find !== false) void this.find; // start tracking activity right away when the host configured the AI layer
+    void this.folding;
   }
 
   /** Remove every listener and leave the rendered (read-only) document in place. */
   destroy(): void {
     this.abort.abort();
+    this.announcer.destroy();
     this.menu.destroy();
     this._ai?.destroy();
     this._find?.destroy();
@@ -215,6 +235,7 @@ export class Editor {
     this.readOnly = readOnly;
     this.root.contentEditable = readOnly ? "false" : "true";
     this.root.classList.toggle("tm-readonly", readOnly);
+    this.root.setAttribute("aria-readonly", String(readOnly));
     if (readOnly) this.applyFocus(null);
   }
 
@@ -224,6 +245,7 @@ export class Editor {
    */
   setSourceMode(on: boolean): void {
     const sel = this.getSel();
+    if (on !== this.isSourceMode()) this.announce(on ? "Source mode on: markdown syntax visible" : "Source mode off");
     this.root.classList.toggle("tm-source-mode", on);
     if (sel) this.setCaret(sel.start, sel.collapsed ? undefined : sel.end);
   }
@@ -249,6 +271,16 @@ export class Editor {
 
   isReadOnly(): boolean {
     return this.readOnly;
+  }
+
+  /** Speak text through the editor's polite live region (screen readers). */
+  announce(text: string): void {
+    this.announcer?.announce(text);
+  }
+
+  /** The live region element (for hosts that want to inspect or restyle it). */
+  get liveRegion(): HTMLElement {
+    return this.announcer.el;
   }
 
   /** Put the caret at the end of the document. */
@@ -403,6 +435,35 @@ export class Editor {
   /** Block element by id (for overlays). */
   blockElement(id: string): HTMLElement | undefined {
     return this.els.get(id);
+  }
+
+  private _folding?: Folding;
+  /** Collapsible headings, foldable callouts and `+++` toggles (view state, never the markdown). */
+  get folding(): Folding {
+    return (this._folding ??= new Folding(this));
+  }
+  fold(id: string): void {
+    this.folding.fold(id);
+  }
+  unfold(id: string): void {
+    this.folding.unfold(id);
+  }
+  toggleFold(id: string): void {
+    this.folding.toggle(id);
+  }
+  isFolded(id: string): boolean {
+    return this.folding.isFolded(id);
+  }
+  /** Folded block ids, for hosts that persist folds. */
+  getFolds(): string[] {
+    return this.folding.getFolds();
+  }
+  setFolds(ids: string[]): void {
+    this.folding.setFolds(ids);
+  }
+  /** The host's link-card metadata hook (EditorOptions.linkPreview). */
+  get linkPreview(): LinkPreviewFn | undefined {
+    return this.opts.linkPreview;
   }
 
   private _find?: Finder;
@@ -825,10 +886,12 @@ export class Editor {
   }
 
   undo(): void {
+    if (this.undoStack.length) this.announce("Undo");
     this.travel(this.undoStack, this.redoStack);
   }
 
   redo(): void {
+    if (this.redoStack.length) this.announce("Redo");
     this.travel(this.redoStack, this.undoStack);
   }
 
@@ -1024,9 +1087,34 @@ export class Editor {
     this.replaceRange(pos, pos, md);
   }
 
+  /** The caret block as typing aids see it (single-block selections only). */
+  private typingCtx(sel: { start: Pos; end: Pos }): TypingCtx | null {
+    const b = sel.start.bid === sel.end.bid ? this.block(sel.start.bid) : undefined;
+    if (!b) return null;
+    return {
+      bid: b.id,
+      src: b.src,
+      start: Math.min(sel.start.off, sel.end.off),
+      end: Math.max(sel.start.off, sel.end.off),
+      set: (src, a, z, kind = "edit") => {
+        b.src = src;
+        this.reconcile();
+        const caret = { bid: b.id, off: a };
+        this.setCaret(caret, z === undefined ? undefined : { bid: b.id, off: z });
+        this.commit(kind, caret);
+      },
+    };
+  }
+
   private onPasteFiles(e: ClipboardEvent): void {
     const files = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type.startsWith("image/"));
-    if (!files.length) return;
+    if (!files.length) {
+      const sel = this.getSel();
+      const md = this.typing.pasteText(sel && this.typingCtx(sel), e.clipboardData);
+      if (md == null || !sel) return;
+      e.preventDefault();
+      return this.replaceRange(sel.start, sel.end, md.replace(/\r\n?/g, "\n"));
+    }
     e.preventDefault();
     const at = this.getSel()?.start;
     const img = at && this.emptyImageAt(at);
@@ -1115,6 +1203,8 @@ export class Editor {
 
     if (t === "historyUndo") return prevent(), this.undo();
     if (t === "historyRedo") return prevent(), this.redo();
+    const tc = this.typingCtx(sel);
+    if (tc && this.typing.handleInput(tc, e)) return;
 
     if (t === "insertParagraph") {
       prevent();
