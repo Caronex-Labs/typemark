@@ -43,7 +43,9 @@ class TmPreview extends HTMLElement {
     clearTimeout(this.timer);
     const lang = (this.getAttribute("lang") ?? "").toLowerCase();
     const code = this.getAttribute("code") ?? "";
-    const dark = typeof matchMedia !== "undefined" && matchMedia("(prefers-color-scheme: dark)").matches;
+    // an explicit data-theme (on any ancestor) wins over the OS setting
+    const forced = this.closest("[data-theme]")?.getAttribute("data-theme") ?? document.documentElement.getAttribute("data-theme");
+    const dark = forced ? forced === "dark" : typeof matchMedia !== "undefined" && matchMedia("(prefers-color-scheme: dark)").matches;
     const key = `${lang}\0${dark}\0${code}`;
     const root = this.shadowRoot ?? this.attachShadow({ mode: "open" });
     const hit = cache.get(key);

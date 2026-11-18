@@ -294,6 +294,7 @@ export class AIReview {
   private replyDrafts = new Map<string, string>();
   private noteEvents = new Map<string, ThreadEvent>();
   private knownMd = "";
+  private shown = new Set<string>();
   private listeners: { [K in keyof AIReviewEvents]: AIReviewEvents[K][] } = { settled: [], reply: [], instruction: [] };
   private threads = new Map<string, ThreadRec>();
   private dirty = new Set<number>();
@@ -1035,6 +1036,10 @@ export class AIReview {
     for (const g of byUnit.values()) phantoms.push({ at: g.unit.to, el: this.threadEl(g.unit, g.notes, g.blocks) });
     phantoms.sort((a, b) => a.at - b.at);
     for (const p of phantoms) {
+      // cards are rebuilt on every render: animate only the first appearance (no flicker)
+      const key = p.el.dataset.id ?? "";
+      if (this.shown.has(key)) p.el.classList.add("tm-seen");
+      else this.shown.add(key);
       const pt = this.editor.domPointAt(p.at);
       let after: Element | null = pt?.block ?? null;
       while (after?.nextElementSibling?.hasAttribute("data-tm-ai")) after = after.nextElementSibling;

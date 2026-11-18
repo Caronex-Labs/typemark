@@ -147,6 +147,7 @@ const applyTheme = () => {
   $("#t-theme").title = `Theme: ${theme}`;
   $("#t-theme").setAttribute("aria-label", `Theme: ${theme}`);
   store.set("tm-theme", theme);
+  ed.refresh(); // diagrams pick their theme at render time
 };
 $("#t-theme").onclick = () => {
   theme = themes[(themes.indexOf(theme) + 1) % themes.length];

@@ -458,3 +458,5 @@
 .tm-editor .md-linkcard-image { width: 120px; max-height: 80px; object-fit: cover; border-radius: 4px; flex-shrink: 0; }
 .tm-editor .md-linkcard-loading { opacity: .75; }
 @media (max-width: 480px) { .tm-editor .md-linkcard-image { display: none; } }
+
+.tm-editor .tm-phantom.tm-seen { animation: none; }
