@@ -21,12 +21,12 @@ Use the standalone build from a CDN (no bundler). Pin the version.
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Notes</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/typemark@0.4.0/dist/style.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@caronex/typemark@0.4.0/dist/style.css">
 </head>
 <body>
   <div id="editor"></div>
   <script type="module">
-    import { createEditor, connectAgent } from "https://cdn.jsdelivr.net/npm/typemark@0.4.0/dist/typemark.standalone.js";
+    import { createEditor, connectAgent } from "https://cdn.jsdelivr.net/npm/@caronex/typemark@0.4.0/dist/typemark.standalone.js";
     const editor = createEditor(document.getElementById("editor"), {
       value: "# Untitled\n\n",
       placeholder: "Start writing…  (type / for syntax)",
@@ -38,7 +38,7 @@ Use the standalone build from a CDN (no bundler). Pin the version.
 </html>
 ```
 
-In a bundled app: `npm install typemark`, then `import { createEditor } from "typemark"; import "typemark/style.css";`.
+In a bundled app: `npm install @caronex/typemark`, then `import { createEditor } from "@caronex/typemark"; import "@caronex/typemark/style.css";`.
 
 Rules when building:
 - **Never add formatting toolbars.** Writing is done with markdown syntax; the `/` menu teaches it. Toolbars hold app things only (title, word count `editor.getStats()`, `editor.setSourceMode(b)`, `editor.setFocusMode(b)`, theme).

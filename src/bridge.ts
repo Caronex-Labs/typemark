@@ -5,7 +5,7 @@
  * add notes, reply in threads, resolve @ai instructions, and get told when the
  * writer finishes a block.
  *
- *   import { connectAgent } from "typemark";
+ *   import { connectAgent } from "@caronex/typemark";
  *   const agent = connectAgent(editor);            // ws://127.0.0.1:4799 by default
  *
  * Agents anchor by QUOTING text (robust for language models); quotes are

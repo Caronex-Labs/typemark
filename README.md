@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/typemark"><img alt="npm" src="https://img.shields.io/npm/v/typemark?color=8a6cff"></a>
+  <a href="https://www.npmjs.com/package/@caronex/typemark"><img alt="npm" src="https://img.shields.io/npm/v/@caronex/typemark?color=8a6cff"></a>
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-6c8cff"></a>
   <img alt="no framework" src="https://img.shields.io/badge/framework-none-b46cff">
 </p>
@@ -54,17 +54,17 @@ announcements, keyboard-only review).
 ## Install
 
 ```bash
-npm install typemark
+npm install @caronex/typemark
 ```
 
 Or with no build step (one ES module with its dependencies bundled):
 
 ```html
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/typemark@0.4.0/dist/style.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@caronex/typemark@0.4.0/dist/style.css">
 <div id="editor"></div>
 <script type="module">
-  import { createEditor } from "https://cdn.jsdelivr.net/npm/typemark@0.4.0/dist/typemark.standalone.js";
+  import { createEditor } from "https://cdn.jsdelivr.net/npm/@caronex/typemark@0.4.0/dist/typemark.standalone.js";
   createEditor(document.querySelector("#editor"), { value: "# Hello\n\nStart *writing*." });
 </script>
 ```
@@ -74,8 +74,8 @@ See [`examples/cdn.html`](examples/cdn.html).
 ## Quick start
 
 ```ts
-import { createEditor } from "typemark";
-import "typemark/style.css";
+import { createEditor } from "@caronex/typemark";
+import "@caronex/typemark/style.css";
 
 const editor = createEditor(document.querySelector("#editor")!, {
   value: "# Hello\n\nStart *writing*.",
@@ -168,7 +168,7 @@ unregister function; call `editor.refresh()` if the editor already exists).
 ### Built-ins with your behaviour
 
 ```ts
-import { registerExtension, wikilinks, tags, mentions, actionButtons } from "typemark";
+import { registerExtension, wikilinks, tags, mentions, actionButtons } from "@caronex/typemark";
 
 registerExtension(wikilinks({ onOpen: (t) => router.open(t), exists: (t) => notes.has(t), suggest: (q) => notes.search(q) }));
 registerExtension(tags({ onOpen: (t) => search("#" + t) }));
@@ -266,7 +266,7 @@ Add items to the `/` menu with `registerExtension(slashMenu([...extraItems]))`.
 ### Fence renderers: any ```` ```lang ```` as a live preview
 
 ```ts
-import { registerFenceRenderer, mermaidRenderer } from "typemark";
+import { registerFenceRenderer, mermaidRenderer } from "@caronex/typemark";
 
 createEditor(el, { renderers: { mermaid: mermaidRenderer(() => import("mermaid")) } });
 
@@ -321,7 +321,7 @@ don't repeat or contradict it.
 Pure functions: no DOM, works on a server or in a worker.
 
 ```ts
-import { extractMetadata, buildBacklinks } from "typemark";
+import { extractMetadata, buildBacklinks } from "@caronex/typemark";
 
 const m = extractMetadata(markdown);
 m.title; m.frontmatter?.data;          // properties
@@ -360,7 +360,7 @@ Ask in plain words; the skill makes Claude use typemark (CDN build, syntax-first
 Connect the page to the local bridge (127.0.0.1 only; localhost pages only by default):
 
 ```ts
-import { connectAgent } from "typemark";
+import { connectAgent } from "@caronex/typemark";
 connectAgent(editor, { docId: "api-docs" }); // ws://127.0.0.1:4799
 ```
 
