@@ -10,15 +10,55 @@
  * Structural edits (Enter, merging blocks, cross-block selections, paste,
  * undo) never go through the browser; they are model operations.
  */
-import { Block, blockType, continuation, fenceInfo, indentOf, mkBlock, parse, pipesOf, prefixLen, renderBlock, serialize } from "./block";
+import { Block, BlockType, blockType, continuation, fenceInfo, indentOf, mkBlock, parse, pipesOf, prefixLen, renderBlock, serialize } from "./block";
 import "./math";
 import { Pos, blockElOf, placeCaret, posOf } from "./caret";
 
 export interface EditorOptions {
+  /** Initial markdown. */
   value?: string;
+  /** Called after every change with the full markdown document. */
   onChange?: (markdown: string) => void;
+  /** Called when the caret moves or the document changes; use it to drive toolbars. */
+  onStateChange?: (state: EditorState) => void;
+  /** Shown while the document is empty. */
   placeholder?: string;
+  /** Start in read-only mode (rendered, syntax never revealed, no editing). */
+  readOnly?: boolean;
+  /** Browser spellcheck (default true). */
+  spellcheck?: boolean;
 }
+
+/** Inline formats that can be toggled with `exec`. */
+export type InlineFormat = "bold" | "italic" | "code" | "strike" | "highlight";
+
+export type Command =
+  | { type: InlineFormat }
+  | { type: "heading"; level: 0 | 1 | 2 | 3 | 4 | 5 | 6 }
+  | { type: "bulletList" | "orderedList" | "taskList" | "quote" }
+  | { type: "codeBlock" | "mathBlock" | "table" | "hr" }
+  | { type: "undo" | "redo" };
+
+/** What is under the caret, for toolbars and status bars. */
+export interface EditorState {
+  /** Block type at the caret ("paragraph", "heading", "ul", "table", ...). */
+  block: BlockType | null;
+  /** Heading level, 0 when not a heading. */
+  headingLevel: number;
+  /** Inline formats the caret is inside. */
+  formats: InlineFormat[];
+  canUndo: boolean;
+  canRedo: boolean;
+}
+
+const MARKS: Record<InlineFormat, string> = { bold: "**", italic: "*", code: "`", strike: "~~", highlight: "==" };
+const FORMAT_CLASS: Record<string, InlineFormat> = {
+  "md-strong": "bold",
+  "md-em": "italic",
+  "md-code": "code",
+  "md-del": "strike",
+  "md-mark": "highlight",
+};
 
 interface Snapshot {
   blocks: Block[];
@@ -38,32 +78,38 @@ export class Editor {
   private lastTime = 0;
   private current!: Snapshot;
   private opts: EditorOptions;
-  private onSel = () => this.syncFocus();
+  private readOnly = false;
+  private abort = new AbortController();
+  private lastState = "";
 
   constructor(root: HTMLElement, opts: EditorOptions = {}) {
     this.root = root;
     this.opts = opts;
     root.classList.add("tm-editor");
-    root.contentEditable = "true";
-    root.spellcheck = true;
+    root.spellcheck = opts.spellcheck ?? true;
     if (opts.placeholder) root.dataset.placeholder = opts.placeholder;
+    this.setReadOnly(!!opts.readOnly);
     this.setMarkdown(opts.value ?? "");
-    root.addEventListener("beforeinput", (e) => this.onBeforeInput(e as InputEvent));
-    root.addEventListener("input", () => this.onInput());
-    root.addEventListener("keydown", (e) => this.onKeyDown(e));
-    root.addEventListener("compositionstart", () => (this.composing = true));
-    root.addEventListener("compositionend", () => {
+    const on = <K extends keyof HTMLElementEventMap>(t: K, f: (e: HTMLElementEventMap[K]) => void) =>
+      root.addEventListener(t, (e) => !this.readOnly && f(e), { signal: this.abort.signal });
+    on("beforeinput", (e) => this.onBeforeInput(e as InputEvent));
+    on("input", () => this.onInput());
+    on("keydown", (e) => this.onKeyDown(e));
+    on("compositionstart", () => (this.composing = true));
+    on("compositionend", () => {
       this.composing = false;
       this.onInput();
     });
-    root.addEventListener("copy", (e) => this.onCopy(e, false));
-    root.addEventListener("cut", (e) => this.onCopy(e, true));
-    root.addEventListener("mousedown", (e) => this.onMouseDown(e));
-    document.addEventListener("selectionchange", this.onSel);
+    on("copy", (e) => this.onCopy(e, false));
+    on("cut", (e) => this.onCopy(e, true));
+    root.addEventListener("mousedown", (e) => this.onMouseDown(e), { signal: this.abort.signal });
+    document.addEventListener("selectionchange", () => this.syncFocus(), { signal: this.abort.signal });
   }
 
+  /** Remove every listener and leave the rendered (read-only) document in place. */
   destroy(): void {
-    document.removeEventListener("selectionchange", this.onSel);
+    this.abort.abort();
+    this.applyFocus(null);
     this.root.contentEditable = "false";
   }
 
@@ -73,6 +119,7 @@ export class Editor {
     return serialize(this.blocks);
   }
 
+  /** Replace the whole document. Clears undo history. */
   setMarkdown(md: string): void {
     this.blocks = parse(md);
     this.root.innerHTML = "";
@@ -81,11 +128,101 @@ export class Editor {
     this.current = this.snapshot(null);
     this.undoStack = [];
     this.redoStack = [];
+    this.emitState();
   }
 
+  setReadOnly(readOnly: boolean): void {
+    this.readOnly = readOnly;
+    this.root.contentEditable = readOnly ? "false" : "true";
+    this.root.classList.toggle("tm-readonly", readOnly);
+    if (readOnly) this.applyFocus(null);
+  }
+
+  isReadOnly(): boolean {
+    return this.readOnly;
+  }
+
+  /** Put the caret at the end of the document. */
   focus(): void {
     const last = this.blocks[this.blocks.length - 1];
+    this.root.focus();
     this.setCaret({ bid: last.id, off: last.src.length });
+  }
+
+  /** Run an editing command at the caret / selection (for toolbars and menus). */
+  exec(cmd: Command): void {
+    if (this.readOnly) return;
+    if (cmd.type === "undo") return this.undo();
+    if (cmd.type === "redo") return this.redo();
+    if (cmd.type in MARKS) return this.wrapSelection(MARKS[cmd.type as InlineFormat]);
+    const sel = this.getSel() ?? { start: this.endOf(this.blocks[this.blocks.length - 1]) };
+    const b = this.block(sel.start.bid)!;
+    const body = b.src.slice(prefixLen(b.src));
+    const inBody = Math.max(0, sel.start.off - prefixLen(b.src));
+    const setPrefix = (prefix: string) => {
+      const cur = b.src.slice(0, prefixLen(b.src));
+      const next = cur === prefix ? "" : prefix; // same command again toggles it off
+      b.src = next + body;
+      this.after({ bid: b.id, off: next.length + inBody });
+    };
+    switch (cmd.type) {
+      case "heading":
+        return setPrefix(cmd.level ? "#".repeat(cmd.level) + " " : "");
+      case "bulletList":
+        return setPrefix("- ");
+      case "orderedList":
+        return setPrefix("1. ");
+      case "taskList":
+        return setPrefix("- [ ] ");
+      case "quote":
+        return setPrefix("> ");
+      case "hr":
+        return this.insertBlockAfter(b, "---"), this.insertBlockAfter(this.blocks[this.index(b.id) + 1], "");
+      case "codeBlock":
+      case "mathBlock":
+      case "table": {
+        const src =
+          cmd.type === "codeBlock" ? "```\n\n```" : cmd.type === "mathBlock" ? "$$\n\n$$" : "|   |   |\n| --- | --- |\n|   |   |";
+        const nb = mkBlock(src);
+        const replace = b.src === "";
+        this.blocks.splice(this.index(b.id) + (replace ? 0 : 1), replace ? 1 : 0, nb);
+        return this.after({ bid: nb.id, off: cmd.type === "table" ? 2 : src.indexOf("\n") + 1 });
+      }
+    }
+  }
+
+  /** What is under the caret right now. */
+  getState(): EditorState {
+    const sel = this.getSel();
+    const b = sel ? this.block(sel.start.bid) : undefined;
+    const block = b ? blockType(b.src) : null;
+    const formats = new Set<InlineFormat>();
+    const el = b && this.els.get(b.id);
+    if (el && sel) {
+      for (const inl of el.querySelectorAll<HTMLElement>(".md-inline")) {
+        const s = Number(inl.dataset.s);
+        const e = Number(inl.dataset.e);
+        if (s < sel.start.off && sel.start.off < e) {
+          for (const c of inl.classList) if (FORMAT_CLASS[c]) formats.add(FORMAT_CLASS[c]);
+        }
+      }
+    }
+    return {
+      block,
+      headingLevel: block === "heading" ? b!.src.match(/^#+/)![0].length : 0,
+      formats: [...formats],
+      canUndo: this.undoStack.length > 0,
+      canRedo: this.redoStack.length > 0,
+    };
+  }
+
+  private emitState(): void {
+    if (!this.opts.onStateChange) return;
+    const st = this.getState();
+    const key = JSON.stringify(st);
+    if (key === this.lastState) return;
+    this.lastState = key;
+    this.opts.onStateChange(st);
   }
 
   // ---------- rendering ----------
@@ -190,7 +327,8 @@ export class Editor {
   }
 
   private syncFocus(): void {
-    if (this.composing) return;
+    if (this.composing || this.readOnly) return;
+    queueMicrotask(() => this.emitState());
     const sel = this.getSel();
     if (!sel) return this.applyFocus(null);
     this.applyFocus(sel.start);
@@ -221,6 +359,7 @@ export class Editor {
     this.lastTime = now;
     this.current = this.snapshot(caret);
     this.opts.onChange?.(this.getMarkdown());
+    this.emitState();
   }
 
   undo(): void {

@@ -5,10 +5,10 @@
  * textContent === markdown-source invariant still holds.
  */
 import katex from "katex";
-import "katex/dist/katex.min.css"; // registers KaTeX fonts at document level
-import katexCss from "katex/dist/katex.min.css?inline";
+import katexCss from "katex/dist/katex.min.css?raw";
 
-const sheetText = katexCss + ":host{display:inline-block;cursor:pointer}:host([display]){display:block;text-align:center}.err{color:#c33;font:12px monospace}";
+// @font-face is ignored inside shadow roots (fonts come from the document stylesheet), so drop it
+const sheetText = katexCss.replace(/@font-face\{[^}]*\}/g, "") + ":host{display:inline-block;cursor:pointer}:host([display]){display:block;text-align:center}.err{color:#c33;font:12px monospace}";
 
 class TmMath extends HTMLElement {
   static get observedAttributes() {
