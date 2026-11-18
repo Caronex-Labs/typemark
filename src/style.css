@@ -1,0 +1,100 @@
+/* typemark-lite: seamless live-preview markdown. Theme via the custom properties. */
+.tm-editor {
+  --tm-fg: #333;
+  --tm-bg: #fff;
+  --tm-meta: #b4b4b4;
+  --tm-accent: #4183c4;
+  --tm-code-bg: #f3f4f4;
+  --tm-quote: #777;
+  --tm-border: #dfe2e5;
+  color: var(--tm-fg);
+  background: var(--tm-bg);
+  font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  outline: none;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  caret-color: var(--tm-fg);
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 40px 30px 40vh;
+}
+@media (prefers-color-scheme: dark) {
+  .tm-editor {
+    --tm-fg: #d6d6d6;
+    --tm-bg: #1e1f22;
+    --tm-meta: #6b6e75;
+    --tm-accent: #6cb6ff;
+    --tm-code-bg: #2b2d31;
+    --tm-quote: #9a9a9a;
+    --tm-border: #3a3d42;
+  }
+}
+
+/* ---- the trick: syntax lives in the DOM, hidden until the caret is near ---- */
+.tm-editor .md-meta { display: none; color: var(--tm-meta); font-weight: normal; font-style: normal; }
+.tm-editor .md-expand > .md-meta,
+.tm-editor .md-expand .md-meta { display: inline; }
+.tm-editor .md-focus > .md-block-meta,
+.tm-editor .md-focus > pre > .md-block-meta { display: inline; }
+.tm-editor .md-hr .md-block-meta { display: inline; }
+
+/* ---- blocks ---- */
+.tm-editor .md-block { margin: 0 0 0.8em; min-height: 1.65em; position: relative; }
+.tm-editor h1, .tm-editor h2, .tm-editor h3, .tm-editor h4, .tm-editor h5, .tm-editor h6 { font-weight: 600; line-height: 1.3; margin: 1.1em 0 0.6em; }
+.tm-editor h1 { font-size: 2.1em; border-bottom: 1px solid var(--tm-border); padding-bottom: .25em; }
+.tm-editor h2 { font-size: 1.6em; border-bottom: 1px solid var(--tm-border); padding-bottom: .25em; }
+.tm-editor h3 { font-size: 1.35em; }
+.tm-editor h4 { font-size: 1.15em; }
+.tm-editor h5, .tm-editor h6 { font-size: 1em; }
+.tm-editor h6 { color: var(--tm-quote); }
+.tm-editor blockquote { border-left: 4px solid var(--tm-border); padding-left: 1em; color: var(--tm-quote); margin-left: 0; margin-bottom: 0; }
+.tm-editor .md-focus.md-quote > .md-block-meta { margin-left: -0.6em; }
+
+/* list items: one block per line; bullet drawn by CSS, swapped for the raw marker on focus */
+.tm-editor .md-ul, .tm-editor .md-ol, .tm-editor .md-task {
+  margin-bottom: 0.2em; padding-left: calc(1.6em + var(--indent, 0) * 1.6em);
+}
+.tm-editor .md-ul::before, .tm-editor .md-ol::before {
+  position: absolute; left: calc(var(--indent, 0) * 1.6em); width: 1.3em; text-align: right; color: var(--tm-fg);
+}
+.tm-editor .md-ul::before { content: "•"; }
+.tm-editor .md-ol::before { content: attr(data-n) "."; }
+.tm-editor .md-focus.md-ul::before, .tm-editor .md-focus.md-ol::before { content: none; }
+.tm-editor .md-focus.md-ul > .md-block-meta, .tm-editor .md-focus.md-ol > .md-block-meta { margin-left: -1.6em; display: inline-block; min-width: 1.6em; }
+.tm-editor .md-task-box {
+  position: absolute; left: calc(var(--indent, 0) * 1.6em + .2em); top: .35em; width: 1em; height: 1em;
+  border: 1.5px solid var(--tm-meta); border-radius: 3px; cursor: pointer; user-select: none;
+}
+.tm-editor .md-task[data-checked] .md-task-box { background: var(--tm-accent); border-color: var(--tm-accent); }
+.tm-editor .md-task[data-checked] .md-task-box::after { content: "✓"; color: #fff; font-size: .8em; position: absolute; left: .12em; top: -.2em; }
+.tm-editor .md-task[data-checked]:not(.md-focus) { color: var(--tm-quote); }
+.tm-editor .md-focus.md-task .md-task-box { display: none; }
+.tm-editor .md-focus.md-task > .md-block-meta { margin-left: -1.6em; }
+/* a run of list items reads as one list */
+.tm-editor .md-block:not(.md-ul):not(.md-ol):not(.md-task) + :is(.md-ul, .md-ol, .md-task) { margin-top: -0.2em; }
+
+.tm-editor .md-hr:not(.md-focus) { color: transparent; border-bottom: 2px solid var(--tm-border); height: 0; min-height: 0; margin: 1.4em 0; line-height: 0; overflow: hidden; }
+.tm-editor .md-hr:not(.md-focus) .md-block-meta { color: transparent; }
+
+.tm-editor pre.md-code-block {
+  background: var(--tm-code-bg); border-radius: 6px; padding: 10px 14px; margin: 0;
+  font: 0.9em/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap;
+}
+.tm-editor .md-code > pre[data-lang]:not(:has(.md-block-meta:only-of-type))::after { content: none; }
+.tm-editor .md-code:not(.md-focus) pre[data-lang]::before {
+  content: attr(data-lang); float: right; font-size: .75em; color: var(--tm-meta);
+}
+
+/* ---- inline ---- */
+.tm-editor code.md-code { background: var(--tm-code-bg); border-radius: 3px; padding: 0 .25em; font: .9em ui-monospace, SFMono-Regular, Menlo, monospace; }
+.tm-editor a.md-link { color: var(--tm-accent); text-decoration: none; cursor: text; }
+.tm-editor a.md-link:hover { text-decoration: underline; }
+.tm-editor mark { background: #ff0; color: inherit; }
+@media (prefers-color-scheme: dark) { .tm-editor mark { background: #6b5d00; } }
+.tm-editor .md-image img { max-width: 100%; vertical-align: middle; border-radius: 4px; }
+.tm-editor .md-image.md-expand img { display: block; margin-top: .3em; }
+
+/* placeholder */
+.tm-editor.tm-empty .md-block:first-child::before {
+  content: attr(data-placeholder); color: var(--tm-meta); position: absolute; pointer-events: none;
+}

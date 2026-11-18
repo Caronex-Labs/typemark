@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>typemark-lite</title>
+    <style>
+      html, body { margin: 0; background: #fff; }
+      @media (prefers-color-scheme: dark) { html, body { background: #1e1f22; } }
+      #bar { position: fixed; top: 8px; right: 12px; font: 12px system-ui; z-index: 2; }
+      #bar button { font: inherit; }
+      #src { position: fixed; inset: 40px 12px 12px auto; width: 38vw; display: none; font: 12px ui-monospace, monospace;
+             white-space: pre-wrap; overflow: auto; background: #f6f6f6; padding: 10px; border-radius: 6px; color: #333; }
+      body.show-src #src { display: block; }
+      body.show-src #editor { margin-right: 40vw; }
+    </style>
+  </head>
+  <body>
+    <div id="bar"><button id="toggle">Show markdown</button></div>
+    <div id="editor"></div>
+    <pre id="src"></pre>
+    <script type="module">
+      import "./src/style.css";
+      import { createEditor } from "./src/index.ts";
+
+      const sample = `# Welcome to typemark-lite
+
+Type markdown and it renders *as you type*. Move the caret into **bold text**, a \`code span\`, or a [link](https://example.com) and its syntax appears; move away and it hides.
+
+## Try these
+
+- Start a line with \`# \` to make a heading
+- \`- \` or \`1. \` starts a list, Enter continues it, Enter on an empty item ends it
+- [ ] \`- [ ] \` makes a task, click the box to tick it
+- [x] Tab / Shift+Tab indents list items
+
+> Quotes start with \`> \`
+
+\`\`\`js
+// type \`\`\`lang then Enter for a code block
+const answer = 42;
+\`\`\`
+
+---
+
+Also: ~~strike~~, ==highlight==, Cmd+B / Cmd+I / Cmd+E, Cmd+Z undo, and copy gives you markdown.`;
+
+      const srcEl = document.getElementById("src");
+      const ed = createEditor(document.getElementById("editor"), {
+        value: localStorage.getItem("tm-doc") ?? sample,
+        placeholder: "Start writing…",
+        onChange: (md) => {
+          srcEl.textContent = md;
+          try { localStorage.setItem("tm-doc", md); } catch {}
+        },
+      });
+      srcEl.textContent = ed.getMarkdown();
+      window.editor = ed;
+      document.getElementById("toggle").onclick = () => document.body.classList.toggle("show-src");
+    </script>
+  </body>
+</html>
